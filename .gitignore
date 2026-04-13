@@ -1,0 +1,17 @@
+.build/
+.appdata/
+.localappdata/
+.nuget/
+NuGet/
+.dotnet/
+.dotnet-home/
+.dotnet_home/
+.claude/
+WireguardSplitTunnel/
+**/bin/
+**/obj/
+runtime.log
+install.status.txt
+
+wgcon/*.conf
+

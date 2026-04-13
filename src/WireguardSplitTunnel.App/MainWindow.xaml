@@ -1,0 +1,197 @@
+<Window x:Class="WireguardSplitTunnel.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        Title="Wireguard Split Tunnel"
+        Height="760"
+        Width="1180"
+        MinHeight="620"
+        MinWidth="940"
+        Background="#F6F8FC">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Wireguard Domain + Software Global Rules"
+                   FontSize="24"
+                   FontWeight="SemiBold"
+                   Foreground="#1F2937" />
+
+        <Border Grid.Row="1"
+                Margin="0,14,0,10"
+                Padding="12"
+                CornerRadius="10"
+                Background="#F3F7FF"
+                BorderBrush="#C9D6FF"
+                BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="WireGuard Config" FontWeight="SemiBold" Foreground="#1F2937" />
+                    <ComboBox x:Name="TunnelConfigCombo"
+                              Margin="0,6,0,0"
+                              MinWidth="420"
+                              DisplayMemberPath="Display"
+                              SelectedValuePath="Path" />
+                    <CheckBox x:Name="AutoEnableCheckBox"
+                              Margin="0,8,0,0"
+                              Content="Auto enable selected tunnel when disconnected" />
+                    <CheckBox x:Name="RestoreOnExitCheckBox"
+                              Margin="0,6,0,0"
+                              Content="Restore normal routing when app exits" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                    <TextBlock Text="Global Mode (Domain + Software)" FontWeight="SemiBold" Foreground="#1F2937" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Text="Mode:" VerticalAlignment="Center" Width="60" />
+                        <ComboBox x:Name="UnifiedGlobalModeCombo" Width="220">
+                            <ComboBoxItem Content="1 = Use WireGuard" />
+                            <ComboBoxItem Content="2 = Bypass WireGuard" />
+                        </ComboBox>
+                    </StackPanel>
+                </StackPanel>
+
+                <Button Grid.Column="2"
+                        x:Name="RefreshConfigsButton"
+                        Content="Refresh"
+                        MinWidth="90"
+                        Margin="12,0,8,0"
+                        Padding="10,6"
+                        VerticalAlignment="Top" />
+
+                <Button Grid.Column="3"
+                        x:Name="BrowseConfigButton"
+                        Content="Browse..."
+                        MinWidth="90"
+                        Margin="0,0,8,0"
+                        Padding="10,6"
+                        VerticalAlignment="Top" />
+
+                <StackPanel Grid.Column="4" Orientation="Vertical">
+                    <Button x:Name="EnableTunnelButton"
+                            Content="Enable Now"
+                            MinWidth="110"
+                            Padding="10,6"
+                            Margin="0,0,0,8" />
+                    <Button x:Name="SaveTempButton"
+                            Content="Save Temp"
+                            MinWidth="110"
+                            Padding="10,6"
+                            Margin="0,0,0,8" />
+                    <Button x:Name="LoadTempButton"
+                            Content="Load Temp"
+                            MinWidth="110"
+                            Padding="10,6" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="2"
+                Margin="0,0,0,14"
+                Padding="12"
+                CornerRadius="10"
+                Background="#E8F2FF"
+                BorderBrush="#BCD8FF"
+                BorderThickness="1">
+            <TextBlock x:Name="TunnelStatusText"
+                       Text="Tunnel: Unknown"
+                       FontSize="14"
+                       Foreground="#1E3A8A" />
+        </Border>
+
+        <TabControl Grid.Row="3">
+            <TabItem Header="Domain Rules">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <DataGrid x:Name="DomainRulesGrid"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              HeadersVisibility="Column"
+                              CanUserAddRows="False"
+                              RowHeaderWidth="0"
+                              SelectionMode="Single">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Domain" Binding="{Binding Domain}" Width="*" />
+                            <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="90" />
+                            <DataGridTextColumn Header="Resolved IPs" Binding="{Binding ResolvedIpCount}" Width="120" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <StackPanel Grid.Row="1"
+                                Margin="0,12,0,0"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right">
+                        <Button x:Name="AddDomainRuleButton" Content="Add Domain" MinWidth="110" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="ToggleDomainEnabledButton" Content="Toggle Enabled" MinWidth="120" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="DeleteDomainRuleButton" Content="Delete Selected" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="ViewDomainIpsButton" Content="View IPs" MinWidth="100" Margin="0,0,8,0" Padding="10,6" />
+                        
+                        <Button x:Name="RollbackButton" Content="Rollback" MinWidth="100" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="SelfTestButton" Content="Self Test" MinWidth="100" Padding="10,6" />
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Software Rules">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <DataGrid x:Name="SoftwareRulesGrid"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              HeadersVisibility="Column"
+                              CanUserAddRows="False"
+                              RowHeaderWidth="0"
+                              SelectionMode="Single">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="*" />
+                            <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="90" />
+                            <DataGridCheckBoxColumn Header="Subprocess" Binding="{Binding IncludeSubprocesses}" Width="110" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <StackPanel Grid.Row="1"
+                                Margin="0,12,0,0"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right">
+                        <Button x:Name="AddSoftwareRuleButton" Content="Add Software" MinWidth="120" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="ToggleSoftwareEnabledButton" Content="Toggle Enabled" MinWidth="120" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="ToggleSubprocessButton" Content="Toggle Subprocess" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="DeleteSoftwareRuleButton" Content="Delete Selected" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="ApplySoftwareButton" Content="Apply Software" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="SoftwareSelfTestButton" Content="Software Self Test" MinWidth="150" Padding="10,6" />
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </Grid>
+</Window>
+
+
+
+
+
+
+
+
