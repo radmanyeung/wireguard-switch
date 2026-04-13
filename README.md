@@ -7,7 +7,7 @@ Windows GUI tool to manage split tunnel for domain rules + software rules with W
 2. Double-click `install.cmd`.
 3. Approve UAC when prompted.
 
-`install.cmd` now forwards all parameters to `scripts\install.ps1`, so command-line switches work from `install.cmd` directly.
+`install.cmd` forwards parameters to `scripts\install.ps1`.
 
 Installer bootstrap does:
 - auto-elevate to Administrator
@@ -32,7 +32,7 @@ install.cmd -SkipPublish -NoDesktopShortcut
 
 ## Start / test
 - Start app: double-click `start.cmd` (or `start-admin.cmd`)
-- When UAC prompt appears, click **Yes**. If you click **No**, bypass routing cannot be applied.
+- When UAC prompt appears, click **Yes**
 - Run tests: double-click `test.cmd`
 
 ## Routing behavior (current)
@@ -62,14 +62,23 @@ pwsh -File .\scripts\test.ps1
 ```
 
 ## GitHub Releases prebuilt
-- Default source: `radmanyeung/wireguard-switch` latest release (must exist and include asset).
-- Installer/startup will auto-download `.zip` or `.exe` prebuilt when local EXE is missing.
-- Recommended release asset name includes `wireguard` + (`split`/`tunnel`/`switch`).
+- Default source: `radmanyeung/wireguard-switch` latest release.
+- Installer/startup auto-downloads `.zip` or `.exe` prebuilt when local EXE is missing.
+- Recommended asset name includes `wireguard` + (`split`/`tunnel`/`switch`).
 
 Environment overrides:
 - `WGST_RELEASE_REPO`: override GitHub repo (format `owner/repo`).
 - `WGST_RELEASE_ASSET_URL`: direct URL to prebuilt `.zip` or `.exe` asset (takes priority).
 
-Release automation:
-- Push a tag like 0.1.0 to GitHub; Actions will auto-build wireguard-split-tunnel-win-x64.zip and create GitHub Release.
+## Release automation (update prebuilt)
+Push a tag like `v0.1.1`; GitHub Actions will auto-build and publish release asset `wireguard-split-tunnel-win-x64.zip`.
 
+Commands:
+```powershell
+git tag -a v0.1.1 -m "Release v0.1.1"
+git push origin v0.1.1
+```
+
+Links:
+- Releases: https://github.com/radmanyeung/wireguard-switch/releases
+- Actions: https://github.com/radmanyeung/wireguard-switch/actions
