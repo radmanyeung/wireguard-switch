@@ -11,8 +11,9 @@ Windows GUI tool to manage split tunnel for domain rules + software rules with W
 
 Installer bootstrap does:
 - auto-elevate to Administrator
-- check/install missing `.NET 8 SDK` (when publish is needed)
 - check/install missing `WireGuard`
+- if no local EXE and no SDK: auto-download latest prebuilt from GitHub Releases
+- check/install missing `.NET 8 SDK` only when prebuilt is unavailable and publish is needed
 - prefer `winget`; fallback to official direct installer download
 - publish app to `.\WireguardSplitTunnel\` (unless skipped)
 - create desktop shortcuts (unless skipped)
@@ -59,3 +60,16 @@ pwsh -File .\scripts\build.ps1
 pwsh -File .\scripts\start.ps1
 pwsh -File .\scripts\test.ps1
 ```
+
+## GitHub Releases prebuilt
+- Default source: `radmanyeung/wireguard-switch` latest release (must exist and include asset).
+- Installer/startup will auto-download `.zip` or `.exe` prebuilt when local EXE is missing.
+- Recommended release asset name includes `wireguard` + (`split`/`tunnel`/`switch`).
+
+Environment overrides:
+- `WGST_RELEASE_REPO`: override GitHub repo (format `owner/repo`).
+- `WGST_RELEASE_ASSET_URL`: direct URL to prebuilt `.zip` or `.exe` asset (takes priority).
+
+Release automation:
+- Push a tag like 0.1.0 to GitHub; Actions will auto-build wireguard-split-tunnel-win-x64.zip and create GitHub Release.
+

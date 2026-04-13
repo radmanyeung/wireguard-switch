@@ -27,6 +27,22 @@ $appCandidates = @(
 )
 $appExe = $appCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 
+if (-not $appExe) {
+    $ensurePrebuiltScript = Join-Path $PSScriptRoot 'ensure-prebuilt.ps1'
+    if (Test-Path $ensurePrebuiltScript) {
+        try {
+            $downloadedExe = & $ensurePrebuiltScript -RepoRoot $repoRoot
+            if (-not [string]::IsNullOrWhiteSpace($downloadedExe) -and (Test-Path $downloadedExe)) {
+                $appExe = $downloadedExe
+                Write-Output "PREBUILT_DOWNLOADED $appExe"
+            }
+        }
+        catch {
+            Write-Warning "Prebuilt download failed: $($_.Exception.Message)"
+        }
+    }
+}
+
 if ($DryRun) {
     if ($appExe) {
         if ($PostInstallSelfTest) {
@@ -96,4 +112,5 @@ if ($LASTEXITCODE -ne 0 -or -not $sdkOutput) {
 
 Start-Process -FilePath dotnet -ArgumentList $dotnetArguments -WorkingDirectory $repoRoot
 Write-Output 'STARTED_DOTNET'
+
 

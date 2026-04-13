@@ -1,0 +1,41 @@
+name: release-prebuilt
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish win-x64 self-contained
+        run: >-
+          dotnet publish ./src/WireguardSplitTunnel.App/WireguardSplitTunnel.App.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -o ./WireguardSplitTunnel
+
+      - name: Pack release zip
+        shell: pwsh
+        run: Compress-Archive -Path ./WireguardSplitTunnel/* -DestinationPath ./wireguard-split-tunnel-win-x64.zip -Force
+
+      - name: Create GitHub Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./wireguard-split-tunnel-win-x64.zip
+          generate_release_notes: true

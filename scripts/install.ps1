@@ -189,6 +189,23 @@ Write-Step 'Checking prerequisites...'
 $dotnetPath = Get-DotnetCommand
 $sdkCount = Get-DotnetSdkCount -DotnetPath $dotnetPath
 $hasSdk = $sdkCount -gt 0
+
+if ((-not $SkipPublish) -and (-not $hasSdk) -and (-not (Test-Path $publishedExe))) {
+    $ensurePrebuiltScript = Join-Path $PSScriptRoot 'ensure-prebuilt.ps1'
+    if (Test-Path $ensurePrebuiltScript) {
+        try {
+            Write-Step 'No SDK + no local prebuilt. Downloading latest prebuilt from GitHub Releases...'
+            $downloadedExe = & $ensurePrebuiltScript -RepoRoot $repoRoot
+            if (-not [string]::IsNullOrWhiteSpace($downloadedExe) -and (Test-Path $downloadedExe)) {
+                Write-Step "Prebuilt downloaded: $downloadedExe"
+            }
+        }
+        catch {
+            Write-Warning "GitHub prebuilt download failed: $($_.Exception.Message)"
+        }
+    }
+}
+
 $needSdkForPublish = (-not $SkipPublish) -and (-not $hasSdk) -and (-not (Test-Path $publishedExe))
 
 if ($needSdkForPublish) {
@@ -283,4 +300,5 @@ if (-not $NoPostInstallSelfTest) {
 }
 
 Write-Step 'Next: app will show self test dialogs. If blocked by UAC, approve prompt.'
+
 
