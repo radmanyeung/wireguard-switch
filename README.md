@@ -27,6 +27,13 @@ Installer bootstrap does:
 - If no local EXE is present, install/start will try to fetch the latest GitHub Release prebuilt automatically.
 - If no Release prebuilt is available, the target PC may need internet access plus `.NET 8 SDK` so the installer can publish locally.
 
+## If someone downloads from Releases
+- Download the latest `wireguard-split-tunnel-win-x64.zip` from GitHub Releases.
+- Extract the ZIP first.
+- Run `install.cmd` from the extracted folder.
+- After install finishes, run `start.cmd`.
+- The Release ZIP includes the published app, helper scripts, and installer/startup wrappers.
+
 ## Optional installer switches
 - `install.cmd -NoPostInstallSelfTest`
 - `install.cmd -SkipPublish`
@@ -83,7 +90,7 @@ Push a tag like `v0.1.1`; GitHub Actions will auto-build and publish release ass
 
 Recommended when sharing with other people:
 - Create a new tag after user-facing fixes, so GitHub Releases contains the latest prebuilt.
-- Tell users to download the latest Release asset when you want the simplest install path.
+- Tell users to download the latest Release asset when you want the simplest install path (`extract -> install.cmd`).
 
 Commands:
 ```powershell

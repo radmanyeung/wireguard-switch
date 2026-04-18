@@ -30,9 +30,38 @@ jobs:
           -p:PublishSingleFile=true
           -o ./WireguardSplitTunnel
 
+      - name: Assemble release package
+        shell: pwsh
+        run: |
+          $packageDir = Join-Path $PWD 'release-package'
+          $publishDir = Join-Path $PWD 'WireguardSplitTunnel'
+          $scriptsDir = Join-Path $PWD 'scripts'
+
+          Remove-Item $packageDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $packageDir | Out-Null
+
+          $rootFiles = @(
+            'install.cmd',
+            'start.cmd',
+            'start-admin.cmd',
+            'start-safe.cmd',
+            'test.cmd',
+            'diagnose.cmd',
+            'fix-dns.cmd',
+            'reset-network.cmd',
+            'README.md'
+          )
+
+          foreach ($file in $rootFiles) {
+            Copy-Item (Join-Path $PWD $file) -Destination $packageDir -Force
+          }
+
+          Copy-Item $scriptsDir -Destination $packageDir -Recurse -Force
+          Copy-Item $publishDir -Destination $packageDir -Recurse -Force
+
       - name: Pack release zip
         shell: pwsh
-        run: Compress-Archive -Path ./WireguardSplitTunnel/* -DestinationPath ./wireguard-split-tunnel-win-x64.zip -Force
+        run: Compress-Archive -Path ./release-package/* -DestinationPath ./wireguard-split-tunnel-win-x64.zip -Force
 
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
