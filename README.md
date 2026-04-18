@@ -19,6 +19,14 @@ Installer bootstrap does:
 - create desktop shortcuts (unless skipped)
 - launch post-install self test (unless skipped)
 
+## If someone downloads from GitHub
+- If they download the repository source (`Code` -> `Download ZIP`), they should extract it first, then run `install.cmd`.
+- After install finishes, start the app with `start.cmd`.
+- On first launch, select a WireGuard `.conf` or `.conf.dpapi` file, then click `Enable Now`.
+- If the target PC already has a published `WireguardSplitTunnel\WireguardSplitTunnel.App.exe`, install will use it.
+- If no local EXE is present, install/start will try to fetch the latest GitHub Release prebuilt automatically.
+- If no Release prebuilt is available, the target PC may need internet access plus `.NET 8 SDK` so the installer can publish locally.
+
 ## Optional installer switches
 - `install.cmd -NoPostInstallSelfTest`
 - `install.cmd -SkipPublish`
@@ -72,6 +80,10 @@ Environment overrides:
 
 ## Release automation (update prebuilt)
 Push a tag like `v0.1.1`; GitHub Actions will auto-build and publish release asset `wireguard-split-tunnel-win-x64.zip`.
+
+Recommended when sharing with other people:
+- Create a new tag after user-facing fixes, so GitHub Releases contains the latest prebuilt.
+- Tell users to download the latest Release asset when you want the simplest install path.
 
 Commands:
 ```powershell
