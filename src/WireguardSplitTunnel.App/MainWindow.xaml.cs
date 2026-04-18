@@ -795,8 +795,8 @@ public partial class MainWindow : Window
             .Except(newIps, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        await routeService.ApplyAsync(wireguardInterfaceName, toAdd, toRemove, CancellationToken.None);
-        await HealMissingDomainRoutesAsync(wireguardInterfaceName, newIps, CancellationToken.None);
+        await ApplyRoutesViaCurrentWireGuardAsync(toAdd, toRemove, CancellationToken.None);
+        await HealMissingDomainRoutesAsync(newIps, CancellationToken.None);
 
         ResolutionStateUpdater.Apply(state, resolvedRules);
         state = state with { ManagedRouteSnapshot = newSnapshot };
@@ -817,21 +817,30 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private async Task HealMissingDomainRoutesAsync(string wireguardInterfaceName, List<string> expectedIps, CancellationToken cancellationToken)
+    private async Task HealMissingDomainRoutesAsync(List<string> expectedIps, CancellationToken cancellationToken)
     {
         if (expectedIps.Count == 0)
         {
             return;
         }
 
-        var wireguardIps = GetInterfaceIpv4Addresses(wireguardInterfaceName);
-        if (wireguardIps.Count == 0)
-        {
-            return;
-        }
-
         for (var attempt = 1; attempt <= 3; attempt++)
         {
+            if (!detector.TryGetActiveInterface(out var currentWireGuardInterfaceName))
+            {
+                logger.Info($"Domain route heal attempt {attempt}: WireGuard interface not detected. Waiting...");
+                await Task.Delay(1000, cancellationToken);
+                continue;
+            }
+
+            var wireguardIps = GetInterfaceIpv4Addresses(currentWireGuardInterfaceName);
+            if (wireguardIps.Count == 0)
+            {
+                logger.Info($"Domain route heal attempt {attempt}: WireGuard IPv4 address not ready yet. Waiting...");
+                await Task.Delay(1000, cancellationToken);
+                continue;
+            }
+
             var allRoutes = GetAllIpv4Routes();
             var missing = expectedIps
                 .Where(ip => !allRoutes.Any(route =>
@@ -852,9 +861,48 @@ public partial class MainWindow : Window
             }
 
             logger.Info($"Domain route heal attempt {attempt}: missing={missing.Count}. Re-applying.");
-            await routeService.ApplyAsync(wireguardInterfaceName, missing, [], cancellationToken);
+            await ApplyRoutesViaCurrentWireGuardAsync(missing, [], cancellationToken);
             await Task.Delay(2000, cancellationToken);
         }
+    }
+
+    private async Task ApplyRoutesViaCurrentWireGuardAsync(IEnumerable<string> toAdd, IEnumerable<string> toRemove, CancellationToken cancellationToken)
+    {
+        InvalidOperationException? lastInterfaceError = null;
+
+        for (var attempt = 1; attempt <= 8; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!detector.TryGetActiveInterface(out var currentWireGuardInterfaceName)
+                || string.IsNullOrWhiteSpace(currentWireGuardInterfaceName))
+            {
+                logger.Info($"Route apply attempt {attempt}: WireGuard interface not detected. Waiting...");
+                await Task.Delay(1000, cancellationToken);
+                continue;
+            }
+
+            try
+            {
+                await routeService.ApplyAsync(currentWireGuardInterfaceName, toAdd, toRemove, cancellationToken);
+                return;
+            }
+            catch (InvalidOperationException ex) when (IsTransientWireGuardInterfaceError(ex))
+            {
+                lastInterfaceError = ex;
+                logger.Info($"Route apply attempt {attempt}: interface transient error ({ex.Message}). Retrying...");
+                await Task.Delay(1000, cancellationToken);
+            }
+        }
+
+        throw lastInterfaceError ?? new InvalidOperationException("WireGuard interface is not ready for route apply.");
+    }
+
+    private static bool IsTransientWireGuardInterfaceError(InvalidOperationException ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("was not found", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("does not expose an IPv4 interface index", StringComparison.OrdinalIgnoreCase);
     }
     private async Task<bool> WaitForWireguardInterfaceAsync(TimeSpan timeout)
     {
