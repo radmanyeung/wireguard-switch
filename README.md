@@ -49,6 +49,13 @@ install.cmd -SkipPublish -NoDesktopShortcut
 - Start app: double-click `start.cmd` (or `start-admin.cmd`)
 - When UAC prompt appears, click **Yes**
 - Run tests: double-click `test.cmd`
+- If startup or install closes immediately, check the `.\logs\` folder for:
+  - `install.cmd.log`
+  - `install.ps1.log`
+  - `start.cmd.log`
+  - `start.ps1.log`
+  - `diagnose.cmd.log`
+- You can also run `diagnose.cmd` to capture current app / WireGuard / route status into a log file.
 
 ## Routing behavior (current)
 - GUI uses one unified global mode for both Domain + Software.

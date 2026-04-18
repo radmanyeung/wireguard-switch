@@ -2,14 +2,32 @@ param(
     [switch]$SkipPublish,
     [switch]$NoDesktopShortcut,
     [switch]$NoPostInstallSelfTest,
-    [switch]$Elevated
+    [switch]$Elevated,
+    [string]$LauncherLogPath
 )
 
 $ErrorActionPreference = 'Stop'
 
+function Write-LauncherLog {
+    param([string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($LauncherLogPath)) {
+        return
+    }
+
+    $directory = Split-Path -Parent $LauncherLogPath
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $line = "[{0}] [INSTALL.PS1] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff zzz'), $Message
+    Add-Content -Path $LauncherLogPath -Value $line
+}
+
 function Write-Step {
     param([string]$Message)
     Write-Host "[INSTALL] $Message"
+    Write-LauncherLog $Message
 }
 
 function Test-IsAdministrator {
@@ -32,6 +50,10 @@ function Ensure-Administrator {
     if ($SkipPublish) { $argList += '-SkipPublish' }
     if ($NoDesktopShortcut) { $argList += '-NoDesktopShortcut' }
     if ($NoPostInstallSelfTest) { $argList += '-NoPostInstallSelfTest' }
+    if (-not [string]::IsNullOrWhiteSpace($LauncherLogPath)) {
+        $argList += '-LauncherLogPath'
+        $argList += "`"$LauncherLogPath`""
+    }
 
     Start-Process -FilePath 'powershell' -Verb RunAs -ArgumentList $argList
     Write-Step 'ELEVATION_REQUESTED'
@@ -176,6 +198,8 @@ function Ensure-WireGuard {
         -Arguments @('/S')
 }
 
+Write-LauncherLog "Startup. elevated=$Elevated skipPublish=$SkipPublish noDesktopShortcut=$NoDesktopShortcut noPostInstallSelfTest=$NoPostInstallSelfTest"
+
 Ensure-Administrator
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -201,6 +225,7 @@ if ((-not $SkipPublish) -and (-not $hasSdk) -and (-not (Test-Path $publishedExe)
             }
         }
         catch {
+            Write-LauncherLog "GitHub prebuilt download failed: $($_.Exception.Message)"
             Write-Warning "GitHub prebuilt download failed: $($_.Exception.Message)"
         }
     }
@@ -257,6 +282,7 @@ if (-not $SkipPublish) {
         }
     }
     elseif (Test-Path $publishedExe) {
+        Write-LauncherLog 'No .NET SDK detected. Skipping publish and using bundled prebuilt EXE.'
         Write-Warning 'No .NET SDK detected. Skipping publish and using bundled prebuilt EXE.'
     }
     else {
@@ -292,11 +318,17 @@ Write-Step 'Install completed.'
 if (-not $NoPostInstallSelfTest) {
     Write-Step 'Launching app for post-install self test...'
     $startScript = Join-Path $PSScriptRoot 'start.ps1'
-    Start-Process -FilePath 'powershell' -ArgumentList @(
+    $argList = @(
         '-ExecutionPolicy', 'Bypass',
         '-File', "`"$startScript`"",
         '-PostInstallSelfTest'
     )
+    if (-not [string]::IsNullOrWhiteSpace($LauncherLogPath)) {
+        $startLogPath = Join-Path (Split-Path -Parent $LauncherLogPath) 'start.ps1.log'
+        $argList += '-LauncherLogPath'
+        $argList += "`"$startLogPath`""
+    }
+    Start-Process -FilePath 'powershell' -ArgumentList $argList
 }
 
 Write-Step 'Next: app will show self test dialogs. If blocked by UAC, approve prompt.'
