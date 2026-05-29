@@ -1,0 +1,5 @@
+[2026-05-29 12:37:25.849 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=True postInstallSelfTest=False
+[2026-05-29 12:37:25.862 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:37:25.878 +08:00] [START.PS1] Existing app candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe (2026-04-16T14:06:54); D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe (2026-05-29T12:32:54)
+[2026-05-29 12:37:25.889 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:37:25.891 +08:00] [START.PS1] Dry run requested.

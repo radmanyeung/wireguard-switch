@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Net.NetworkInformation;
+using System.Runtime.Versioning;
+using System.Text;
+using WireguardSplitTunnel.Core.Platform;
 
 namespace WireguardSplitTunnel.Core.Services;
 
@@ -9,6 +12,36 @@ public interface IRouteService
 }
 
 public sealed class RouteService : IRouteService
+{
+    private readonly IRouteService inner;
+
+    public RouteService()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            inner = new WindowsRouteService();
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            inner = new MacRouteService();
+        }
+        else
+        {
+            throw new PlatformNotSupportedException(
+                $"RouteService is not supported on platform '{PlatformRuntime.CurrentName}'.");
+        }
+    }
+
+    public Task ApplyAsync(
+        string interfaceName,
+        IEnumerable<string> toAdd,
+        IEnumerable<string> toRemove,
+        CancellationToken cancellationToken)
+        => inner.ApplyAsync(interfaceName, toAdd, toRemove, cancellationToken);
+}
+
+[SupportedOSPlatform("windows")]
+internal sealed class WindowsRouteService : IRouteService
 {
     public async Task ApplyAsync(
         string interfaceName,
@@ -95,6 +128,55 @@ public sealed class RouteService : IRouteService
         if (process.ExitCode != 0 || hasFailureWord)
         {
             throw new InvalidOperationException($"route {arguments} failed (exit {process.ExitCode}): {combined}");
+        }
+    }
+}
+
+[SupportedOSPlatform("macos")]
+internal sealed class MacRouteService : IRouteService
+{
+    public async Task ApplyAsync(
+        string interfaceName,
+        IEnumerable<string> toAdd,
+        IEnumerable<string> toRemove,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(interfaceName))
+        {
+            throw new ArgumentException("Interface name is required.", nameof(interfaceName));
+        }
+
+        var addList = toAdd.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var removeList = toRemove.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        if (addList.Count == 0 && removeList.Count == 0)
+        {
+            return;
+        }
+
+        // Batch all route commands into one shell script and elevate once via osascript.
+        // Each line uses `|| true` for deletes so a missing route doesn't abort the whole batch.
+        var script = new StringBuilder();
+        foreach (var ip in removeList)
+        {
+            script.AppendLine($"/sbin/route -n delete -host {ip} >/dev/null 2>&1 || true");
+        }
+        foreach (var ip in addList)
+        {
+            // Remove any stale route first to force-rebind onto the WireGuard interface.
+            script.AppendLine($"/sbin/route -n delete -host {ip} >/dev/null 2>&1 || true");
+            script.AppendLine($"/sbin/route -n add -host {ip} -interface {interfaceName}");
+        }
+
+        var result = await MacAdminShell.RunAsAdminAsync(
+            script.ToString(),
+            "WireGuard split tunnel needs to update routes",
+            cancellationToken);
+
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"route apply failed (exit {result.ExitCode}): {result.Combined}");
         }
     }
 }

@@ -1,0 +1,82 @@
+using System.Diagnostics;
+using System.Runtime.Versioning;
+using System.Text;
+
+namespace WireguardSplitTunnel.Core.Platform;
+
+[SupportedOSPlatform("macos")]
+public static class MacAdminShell
+{
+    public static async Task<MacShellResult> RunAsAdminAsync(
+        string scriptBody,
+        string promptReason,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(scriptBody))
+        {
+            return new MacShellResult(0, string.Empty, string.Empty);
+        }
+
+        // osascript expects the script body as a single AppleScript string with
+        // embedded backslashes/quotes escaped. We bounce through a temp file so
+        // very long batches don't bump into the AppleScript literal-length cap.
+        var tempScript = Path.Combine(Path.GetTempPath(), $"wgst-{Guid.NewGuid():N}.sh");
+        await File.WriteAllTextAsync(tempScript, "#!/bin/bash\nset -e\n" + scriptBody, Encoding.UTF8, cancellationToken);
+
+        try
+        {
+            var chmod = await RunAsync("/bin/chmod", $"700 \"{tempScript}\"", cancellationToken);
+            if (chmod.ExitCode != 0)
+            {
+                return chmod;
+            }
+
+            var prompt = string.IsNullOrWhiteSpace(promptReason) ? "WireGuard split tunnel" : promptReason;
+            var appleScript =
+                $"do shell script \"{Escape(tempScript)}\" " +
+                $"with prompt \"{Escape(prompt)}\" " +
+                "with administrator privileges";
+
+            return await RunAsync("/usr/bin/osascript", $"-e \"{Escape(appleScript)}\"", cancellationToken);
+        }
+        finally
+        {
+            try { File.Delete(tempScript); } catch { }
+        }
+    }
+
+    public static async Task<MacShellResult> RunAsync(
+        string fileName,
+        string arguments,
+        CancellationToken cancellationToken)
+    {
+        var info = new ProcessStartInfo
+        {
+            FileName = fileName,
+            Arguments = arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(info)
+            ?? throw new InvalidOperationException($"Unable to start process: {fileName}");
+
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+
+        return new MacShellResult(process.ExitCode, await stdoutTask, await stderrTask);
+    }
+
+    private static string Escape(string value) => value
+        .Replace("\\", "\\\\", StringComparison.Ordinal)
+        .Replace("\"", "\\\"", StringComparison.Ordinal);
+}
+
+public readonly record struct MacShellResult(int ExitCode, string StandardOutput, string StandardError)
+{
+    public string Combined =>
+        string.IsNullOrEmpty(StandardError) ? StandardOutput : (StandardOutput + "\n" + StandardError).Trim();
+}

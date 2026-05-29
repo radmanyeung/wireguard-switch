@@ -24,10 +24,24 @@ public sealed class WireguardConfigCatalogTests
     }
 
     [Fact]
-    public void DefaultConfigDirectories_ContainsNordPath()
+    public void WindowsDefaultConfigDirectories_ContainsNordPath()
     {
-        WireguardConfigCatalog.DefaultConfigDirectories
+        WireguardConfigCatalog.WindowsDefaultConfigDirectories
             .Should().Contain("C:\\wireguard nord\\");
+    }
+
+    [Fact]
+    public void MacDefaultConfigDirectories_ContainsHomebrewPath()
+    {
+        WireguardConfigCatalog.MacDefaultConfigDirectories
+            .Should().Contain("/opt/homebrew/etc/wireguard");
+    }
+
+    [Fact]
+    public void BuildUninstallTunnelArgs_QuotesName()
+    {
+        WireguardConfigCatalog.BuildUninstallTunnelArgs("home")
+            .Should().Be("/uninstalltunnelservice \"home\"");
     }
 
     [Fact]

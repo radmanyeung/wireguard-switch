@@ -33,6 +33,7 @@ Installer bootstrap does:
 - Run `install.cmd` from the extracted folder.
 - After install finishes, run `start.cmd`.
 - The Release ZIP includes the published app, helper scripts, and installer/startup wrappers.
+- Installer will automatically try to remove the Windows download block (`Unblock-File`) from the extracted release files.
 
 ## Optional installer switches
 - `install.cmd -NoPostInstallSelfTest`

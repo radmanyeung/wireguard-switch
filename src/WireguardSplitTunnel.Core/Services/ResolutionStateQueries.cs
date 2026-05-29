@@ -16,4 +16,23 @@ public static class ResolutionStateQueries
 
         return match.Value ?? [];
     }
+
+    public static IReadOnlyCollection<ResolvedIpDetail> GetResolvedIpDetails(AppState state, string domain)
+    {
+        if (state.LastKnownResolvedIpDetails.TryGetValue(domain, out var details))
+        {
+            return details;
+        }
+
+        var match = state.LastKnownResolvedIpDetails
+            .FirstOrDefault(pair => string.Equals(pair.Key, domain, StringComparison.OrdinalIgnoreCase));
+        if (match.Value is not null)
+        {
+            return match.Value;
+        }
+
+        return GetResolvedIps(state, domain)
+            .Select(ip => new ResolvedIpDetail(ip, domain, ResolvedIpSourceKind.Direct))
+            .ToArray();
+    }
 }

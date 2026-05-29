@@ -198,6 +198,29 @@ function Ensure-WireGuard {
         -Arguments @('/S')
 }
 
+function Unblock-ReleaseFiles {
+    param([Parameter(Mandatory = $true)][string]$RootPath)
+
+    if (-not (Test-Path $RootPath)) {
+        return
+    }
+
+    $targets = @($RootPath) + @(Get-ChildItem -LiteralPath $RootPath -Recurse -File -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+    $count = 0
+
+    foreach ($target in $targets) {
+        try {
+            Unblock-File -LiteralPath $target -ErrorAction Stop
+            $count++
+        }
+        catch {
+            # Ignore files without Zone.Identifier or unsupported filesystems.
+        }
+    }
+
+    Write-Step "Unblock scan completed. Files processed: $count"
+}
+
 Write-LauncherLog "Startup. elevated=$Elevated skipPublish=$SkipPublish noDesktopShortcut=$NoDesktopShortcut noPostInstallSelfTest=$NoPostInstallSelfTest"
 
 Ensure-Administrator
@@ -208,6 +231,8 @@ $publishDir = Join-Path $repoRoot 'WireguardSplitTunnel'
 $publishedExe = Join-Path $publishDir 'WireguardSplitTunnel.App.exe'
 
 Write-Step "Repo root: $repoRoot"
+Write-Step 'Removing Windows download block from release files...'
+Unblock-ReleaseFiles -RootPath $repoRoot
 Write-Step 'Checking prerequisites...'
 
 $dotnetPath = Get-DotnetCommand

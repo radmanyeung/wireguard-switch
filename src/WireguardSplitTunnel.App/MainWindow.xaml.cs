@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Security.Principal;
 using System.Security.Cryptography;
@@ -21,6 +22,7 @@ public partial class MainWindow : Window
     private readonly IWireguardDetector detector = new SystemWireguardDetector();
     private readonly IDomainResolver domainResolver = new SystemDomainResolver();
     private readonly IRouteService routeService = new RouteService();
+    private readonly IDnsCacheReader dnsCacheReader = OperatingSystem.IsWindows() ? new WindowsDnsCacheReader() : new NoOpDnsCacheReader();
     private readonly ISoftwarePolicyService softwarePolicyService = new SoftwareFirewallPolicyService();
     private readonly ISoftwareExecutableLocator softwareExecutableLocator = new SystemSoftwareExecutableLocator();
     private readonly IRunningSoftwareDiscovery runningSoftwareDiscovery = new SystemRunningSoftwareDiscovery();
@@ -50,6 +52,9 @@ public partial class MainWindow : Window
         this.runPostInstallSelfTestOnLoad = runPostInstallSelfTestOnLoad;
         InitializeComponent();
 
+        var versionText = VersionDisplay.FromAssembly(Assembly.GetExecutingAssembly());
+        Title = $"Wireguard Split Tunnel {versionText}";
+        VersionTextBlock.Text = versionText;
         var dataDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "WireguardSplitTunnel");
@@ -82,6 +87,7 @@ public partial class MainWindow : Window
         Closing += OnWindowClosing;
 
         AddDomainRuleButton.Click += OnAddDomainRuleClicked;
+        AddDomainPresetButton.Click += OnAddDomainPresetClicked;
         ToggleDomainEnabledButton.Click += OnToggleDomainEnabledClicked;
         DeleteDomainRuleButton.Click += OnDeleteDomainRuleClicked;
         ViewDomainIpsButton.Click += OnViewDomainIpsClicked;
@@ -581,6 +587,60 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void OnAddDomainPresetClicked(object sender, RoutedEventArgs e)
+    {
+        var preset = PromptSelectDomainPreset();
+        if (preset is null)
+        {
+            return;
+        }
+
+        var result = DomainPresetService.ApplyPreset(state, preset.Value);
+        stateStore.Save(state);
+        RefreshDomainGrid();
+
+        if (result.Added == 0)
+        {
+            MessageBox.Show(this, "All domains in this preset already exist.", "Wireguard Split Tunnel");
+            return;
+        }
+
+        TunnelStatusText.Text = $"Tunnel: Preset added ({result.Added} domains, auto-renewing routes...)";
+        logger.Info($"Domain preset added. preset={preset.Value}, added={result.Added}, skipped={result.SkippedExisting.Count}.");
+
+        var renewed = await RenewDomainRoutesLockedAsync(showMessage: false, fromStartup: false);
+        TunnelStatusText.Text = renewed
+            ? $"Tunnel: Preset added ({result.Added} domains, IP routes renewed)"
+            : $"Tunnel: Preset added ({result.Added} domains, route renew skipped)";
+
+        MessageBox.Show(
+            this,
+            $"Added {result.Added} domains. Skipped existing: {result.SkippedExisting.Count}.",
+            "Wireguard Split Tunnel");
+    }
+
+    private static DomainPreset? PromptSelectDomainPreset()
+    {
+        var input = Interaction.InputBox(
+            "Select preset:" + Environment.NewLine +
+            "1. OpenAI / ChatGPT" + Environment.NewLine +
+            "2. Claude / Anthropic" + Environment.NewLine +
+            "3. Google AI / Gemini" + Environment.NewLine +
+            "4. AI Services Bundle" + Environment.NewLine + Environment.NewLine +
+            "Enter 1, 2, 3, or 4.",
+            "Add Domain Preset",
+            "4");
+
+        return input.Trim() switch
+        {
+            "1" => DomainPreset.OpenAiChatGpt,
+            "2" => DomainPreset.ClaudeAnthropic,
+            "3" => DomainPreset.GoogleAiGemini,
+            "4" => DomainPreset.AiServicesBundle,
+            _ => null
+        };
+    }
+
     private void OnToggleDomainEnabledClicked(object sender, RoutedEventArgs e)
     {
         if (DomainRulesGrid.SelectedItem is not DomainRow selected)
@@ -619,14 +679,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        var ips = ResolutionStateQueries.GetResolvedIps(state, selected.Domain);
-        if (ips.Count == 0)
+        var details = ResolutionStateQueries.GetResolvedIpDetails(state, selected.Domain);
+        if (details.Count == 0)
         {
-            MessageBox.Show(this, "No resolved IPs yet. Please restart app to auto-renew domain IPs.", "Wireguard Split Tunnel");
+            MessageBox.Show(this, "No IPs resolved yet. Click Enable Now or wait for auto-renew.", "Wireguard Split Tunnel");
             return;
         }
 
-        MessageBox.Show(this, string.Join(Environment.NewLine, ips), $"Resolved IPs - {selected.Domain}");
+        var lines = details
+            .OrderBy(detail => detail.SourceKind)
+            .ThenBy(detail => detail.IpAddress, StringComparer.OrdinalIgnoreCase)
+            .Select(detail => detail.SourceKind == ResolvedIpSourceKind.Direct
+                ? $"{detail.IpAddress} (direct)"
+                : $"{detail.IpAddress} (learned: {detail.SourceHost})");
+
+        MessageBox.Show(this, string.Join(Environment.NewLine, lines), $"Resolved IPs - {selected.Domain}");
     }
     private async Task<bool> RenewDomainRoutesLockedAsync(bool showMessage, bool fromStartup)
     {
@@ -772,7 +839,9 @@ public partial class MainWindow : Window
             .Where(rule => rule.Enabled && rule.Mode == DomainRouteMode.UseWireGuard)
             .ToList();
 
-        var resolvedRules = await coordinator.ResolveEnabledRulesAsync(enabledRules, CancellationToken.None);
+        var directResolvedRules = await coordinator.ResolveEnabledRulesAsync(enabledRules, CancellationToken.None);
+        var learnedRules = await LearnDnsCacheRulesAsync(enabledRules, CancellationToken.None);
+        var resolvedRules = ResolvedRuleMergeService.Merge(directResolvedRules, learnedRules);
 
         var previousManagedIps = state.ManagedRouteSnapshot
             .Select(entry => entry.IpAddress)
@@ -817,6 +886,29 @@ public partial class MainWindow : Window
 
         logger.Info($"RenewDomainRoutes finished: resolved={resolvedRules.Count}, add={toAdd.Count}, remove={toRemove.Count}.");
         return true;
+    }
+
+    private async Task<IReadOnlyCollection<ResolvedRule>> LearnDnsCacheRulesAsync(
+        IReadOnlyCollection<DomainRule> enabledRules,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var entries = await dnsCacheReader.ReadAsync(cancellationToken);
+            var learned = DnsCacheLearningService.LearnFromCache(enabledRules, entries);
+            var learnedIpCount = learned.SelectMany(rule => rule.ResolvedIps).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            if (learnedIpCount > 0)
+            {
+                logger.Info($"DNS cache learning found {learnedIpCount} IPv4 routes across {learned.Count} wildcard rules.");
+            }
+
+            return learned;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.Info($"DNS cache learning skipped: {ex.Message}");
+            return [];
+        }
     }
 
     private async Task HealMissingDomainRoutesAsync(List<string> expectedIps, CancellationToken cancellationToken)
@@ -2375,104 +2467,3 @@ public partial class MainWindow : Window
     private sealed record SoftwareRow(string ProcessName, bool Enabled, bool IncludeSubprocesses);
     private sealed record TunnelConfigOption(string Path, string Display);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

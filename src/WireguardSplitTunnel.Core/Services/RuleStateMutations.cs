@@ -66,6 +66,10 @@ public static class RuleStateMutations
             pair => pair.Value.ToList(),
             StringComparer.OrdinalIgnoreCase);
         var snapshot = state.ManagedRouteSnapshot.Select(route => route with { }).ToList();
+        var details = state.LastKnownResolvedIpDetails.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Select(detail => detail with { }).ToList(),
+            StringComparer.OrdinalIgnoreCase);
 
         return new AppState(
             rules,
@@ -76,9 +80,9 @@ public static class RuleStateMutations
             software,
             state.DomainGlobalDefaultMode,
             state.SoftwareGlobalDefaultMode,
-            state.RestoreNormalRoutingOnExit);
+            state.RestoreNormalRoutingOnExit,
+            details);
     }
 
     private static string NormalizeDomain(string domain) => domain.Trim().ToLowerInvariant();
 }
-

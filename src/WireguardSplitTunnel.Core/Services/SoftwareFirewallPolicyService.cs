@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.NetworkInformation;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 using WireguardSplitTunnel.Core.Models;
@@ -11,12 +12,19 @@ public interface ISoftwarePolicyService
     Task ApplyAsync(string wireguardInterfaceName, IEnumerable<SoftwareRule> rules, DomainRouteMode globalDefaultMode, CancellationToken cancellationToken);
 }
 
+[SupportedOSPlatform("windows")]
 public sealed class SoftwareFirewallPolicyService : ISoftwarePolicyService
 {
     private const string RulePrefix = "WGST-Software";
 
     public async Task ApplyAsync(string wireguardInterfaceName, IEnumerable<SoftwareRule> rules, DomainRouteMode globalDefaultMode, CancellationToken cancellationToken)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                "Per-process software rules require Windows Firewall and are not supported on this platform.");
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var enabled = rules

@@ -29,6 +29,22 @@ function Test-IsAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Unblock-AppFile {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) {
+        return
+    }
+
+    try {
+        Unblock-File -LiteralPath $Path -ErrorAction Stop
+        Write-LauncherLog "Unblocked app file: $Path"
+    }
+    catch {
+        Write-LauncherLog "Unblock skipped for app file ($Path): $($_.Exception.Message)"
+    }
+}
+
 try {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     Write-LauncherLog "Startup. repoRoot=$repoRoot elevated=$Elevated dryRun=$DryRun postInstallSelfTest=$PostInstallSelfTest"
@@ -45,7 +61,16 @@ try {
         (Join-Path $repoRoot 'src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe')
     )
     Write-LauncherLog ("App candidates: " + ($appCandidates -join '; '))
-    $appExe = $appCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $appCandidateFiles = $appCandidates |
+        Where-Object { Test-Path $_ } |
+        ForEach-Object { Get-Item -LiteralPath $_ }
+    if ($appCandidateFiles) {
+        Write-LauncherLog ("Existing app candidates: " + (($appCandidateFiles | ForEach-Object { "$($_.FullName) ($($_.LastWriteTime.ToString('s')))" }) -join '; '))
+    }
+
+    $appExe = $appCandidateFiles |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1 -ExpandProperty FullName
     if ($appExe) {
         Write-LauncherLog "Resolved app exe: $appExe"
     }
@@ -115,6 +140,7 @@ try {
 
     if ($appExe) {
         $appArgs = if ($PostInstallSelfTest) { '--post-install-self-test' } else { '' }
+        Unblock-AppFile -Path $appExe
         Write-LauncherLog "Launching exe. path=$appExe args=$appArgs"
         if ([string]::IsNullOrWhiteSpace($appArgs)) {
             Start-Process -FilePath $appExe -WorkingDirectory (Split-Path -Parent $appExe)

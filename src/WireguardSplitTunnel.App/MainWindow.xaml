@@ -18,10 +18,22 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <TextBlock Text="Wireguard Domain + Software Global Rules"
-                   FontSize="24"
-                   FontWeight="SemiBold"
-                   Foreground="#1F2937" />
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Wireguard Domain + Software Global Rules"
+                       FontSize="24"
+                       FontWeight="SemiBold"
+                       Foreground="#1F2937" />
+            <TextBlock x:Name="VersionTextBlock"
+                       Grid.Column="1"
+                       Margin="16,6,0,0"
+                       FontSize="14"
+                       FontWeight="SemiBold"
+                       Foreground="#46607A" />
+        </Grid>
 
         <Border Grid.Row="1"
                 Margin="0,14,0,10"
@@ -140,6 +152,7 @@
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right">
                         <Button x:Name="AddDomainRuleButton" Content="Add Domain" MinWidth="110" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="AddDomainPresetButton" Content="Add Preset" MinWidth="110" Margin="0,0,8,0" Padding="10,6" />
                         <Button x:Name="ToggleDomainEnabledButton" Content="Toggle Enabled" MinWidth="120" Margin="0,0,8,0" Padding="10,6" />
                         <Button x:Name="DeleteDomainRuleButton" Content="Delete Selected" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />
                         <Button x:Name="ViewDomainIpsButton" Content="View IPs" MinWidth="100" Margin="0,0,8,0" Padding="10,6" />
@@ -188,11 +201,3 @@
         </TabControl>
     </Grid>
 </Window>
-
-
-
-
-
-
-
-

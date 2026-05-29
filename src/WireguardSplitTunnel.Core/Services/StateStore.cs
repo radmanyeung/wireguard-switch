@@ -85,6 +85,7 @@ public sealed class StateStore
             DomainRules = state.DomainRules ?? [],
             LastKnownResolvedIps = state.LastKnownResolvedIps ?? new Dictionary<string, List<string>>(),
             ManagedRouteSnapshot = state.ManagedRouteSnapshot ?? [],
+            LastKnownResolvedIpDetails = state.LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(),
             SoftwareRules = state.SoftwareRules ?? [],
             DomainGlobalDefaultMode = domainMode,
             SoftwareGlobalDefaultMode = softwareMode,
@@ -93,6 +94,5 @@ public sealed class StateStore
     }
 
     private static AppState CreateDefaultState() =>
-        new([], new Dictionary<string, List<string>>(), [], null, false, [], DomainRouteMode.BypassWireGuard, DomainRouteMode.BypassWireGuard, false);
+        new([], new Dictionary<string, List<string>>(), [], null, false, [], DomainRouteMode.BypassWireGuard, DomainRouteMode.BypassWireGuard, false, new Dictionary<string, List<ResolvedIpDetail>>());
 }
-

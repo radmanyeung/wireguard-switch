@@ -1,12 +1,24 @@
+using WireguardSplitTunnel.Core.Platform;
+
 namespace WireguardSplitTunnel.Core.Services;
 
 public static class WireguardConfigCatalog
 {
-    public static IReadOnlyList<string> DefaultConfigDirectories { get; } =
+    public static IReadOnlyList<string> WindowsDefaultConfigDirectories { get; } =
     [
         "C:\\Program Files\\WireGuard\\Data\\Configurations",
         "C:\\wireguard nord\\"
     ];
+
+    public static IReadOnlyList<string> MacDefaultConfigDirectories { get; } =
+    [
+        "/etc/wireguard",
+        "/opt/homebrew/etc/wireguard",
+        "/usr/local/etc/wireguard"
+    ];
+
+    public static IReadOnlyList<string> DefaultConfigDirectories =>
+        PlatformRuntime.IsMacOS ? MacDefaultConfigDirectories : WindowsDefaultConfigDirectories;
 
     public static string GetTunnelName(string configPath)
     {
@@ -27,6 +39,9 @@ public static class WireguardConfigCatalog
 
     public static string BuildInstallTunnelArgs(string configPath) =>
         $"/installtunnelservice \"{configPath}\"";
+
+    public static string BuildUninstallTunnelArgs(string tunnelName) =>
+        $"/uninstalltunnelservice \"{tunnelName}\"";
 
     public static List<string> DiscoverConfigPaths(IEnumerable<string>? directories = null)
     {

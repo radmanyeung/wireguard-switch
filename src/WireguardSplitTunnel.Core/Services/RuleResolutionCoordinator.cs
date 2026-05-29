@@ -2,7 +2,13 @@ using WireguardSplitTunnel.Core.Models;
 
 namespace WireguardSplitTunnel.Core.Services;
 
-public sealed record ResolvedRule(DomainRule Rule, IReadOnlyCollection<string> ResolvedIps);
+public sealed record ResolvedRule(
+    DomainRule Rule,
+    IReadOnlyCollection<string> ResolvedIps,
+    IReadOnlyCollection<ResolvedIpDetail>? IpDetails = null)
+{
+    public IReadOnlyCollection<ResolvedIpDetail> IpDetails { get; init; } = IpDetails ?? [];
+}
 
 public sealed class RuleResolutionCoordinator
 {

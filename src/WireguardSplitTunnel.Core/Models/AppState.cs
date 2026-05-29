@@ -9,7 +9,19 @@ public sealed record AppState(
     List<SoftwareRule>? SoftwareRules = null,
     DomainRouteMode DomainGlobalDefaultMode = DomainRouteMode.BypassWireGuard,
     DomainRouteMode SoftwareGlobalDefaultMode = DomainRouteMode.BypassWireGuard,
-    bool RestoreNormalRoutingOnExit = false);
+    bool RestoreNormalRoutingOnExit = false,
+    Dictionary<string, List<ResolvedIpDetail>>? LastKnownResolvedIpDetails = null)
+{
+    public Dictionary<string, List<ResolvedIpDetail>> LastKnownResolvedIpDetails { get; init; } =
+        LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(StringComparer.OrdinalIgnoreCase);
+}
 
 public sealed record ManagedRouteEntry(string Domain, string IpAddress);
 
+public enum ResolvedIpSourceKind
+{
+    Direct = 1,
+    Learned = 2
+}
+
+public sealed record ResolvedIpDetail(string IpAddress, string SourceHost, ResolvedIpSourceKind SourceKind);

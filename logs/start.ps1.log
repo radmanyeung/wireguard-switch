@@ -1,0 +1,229 @@
+[2026-04-21 21:05:42.473 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-21 21:05:42.488 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-21 21:05:42.508 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-21 21:05:42.522 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-21 21:05:46.456 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-21 21:05:46.465 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-21 21:05:46.475 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-21 21:05:46.494 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-21 21:05:46.495 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-22 13:33:04.089 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-22 13:33:04.099 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-22 13:33:04.118 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 13:33:04.130 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-22 13:33:06.693 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-22 13:33:06.701 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-22 13:33:06.710 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 13:33:06.725 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 13:33:06.726 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-22 14:09:54.760 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-22 14:09:54.770 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-22 14:09:54.779 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 14:09:54.791 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-22 14:09:57.528 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-22 14:09:57.536 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-22 14:09:57.544 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 14:09:57.559 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 14:09:57.560 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-22 17:48:08.530 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-22 17:48:08.539 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-22 17:48:08.548 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 17:48:08.560 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-22 17:48:11.087 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-22 17:48:11.095 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-22 17:48:11.104 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 17:48:11.118 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-22 17:48:11.121 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-23 14:00:11.641 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-23 14:00:11.652 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-23 14:00:11.667 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-23 14:00:11.679 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-23 14:00:14.097 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-23 14:00:14.105 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-23 14:00:14.114 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-23 14:00:14.132 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-23 14:00:14.133 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-23 22:14:21.018 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-23 22:14:21.037 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-23 22:14:21.053 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-23 22:14:21.069 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-23 22:14:24.502 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-23 22:14:24.510 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-23 22:14:24.519 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-23 22:14:24.536 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-23 22:14:24.537 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-23 23:57:50.428 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-23 23:57:50.440 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-23 23:57:50.455 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-23 23:57:50.468 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-23 23:57:53.335 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-23 23:57:53.344 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 13:46:58.424 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-24 13:46:58.441 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 13:46:58.456 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 13:46:58.469 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-24 13:47:01.592 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-24 13:47:01.601 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 13:47:01.614 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 13:47:01.633 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 13:47:01.634 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-24 16:13:32.373 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-24 16:13:32.391 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 16:13:32.404 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 16:13:32.416 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-24 16:13:34.997 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-24 16:13:35.009 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 16:13:35.018 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 16:13:35.036 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 16:13:35.037 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-24 17:05:36.769 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-24 17:05:36.783 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 17:05:36.798 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 17:55:05.830 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-24 17:55:05.838 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 17:55:05.849 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 17:55:05.861 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-24 17:55:08.542 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-24 17:55:08.553 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-24 17:55:08.562 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 17:55:08.578 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-24 17:55:08.579 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-27 11:28:28.633 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-27 11:28:28.648 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-27 11:28:28.660 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-27 11:28:28.673 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-27 11:28:31.163 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-27 11:28:31.171 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-27 11:28:31.180 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-27 11:28:31.195 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-27 11:28:31.197 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-27 14:11:27.323 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-27 14:11:27.330 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-27 14:11:27.346 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-27 14:11:27.361 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-27 14:11:29.767 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-27 14:11:29.783 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-27 14:11:29.783 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-27 14:11:29.799 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-27 14:11:29.799 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-28 09:25:51.849 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-28 09:25:51.865 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-28 09:25:51.887 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-28 09:25:51.898 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-28 09:25:54.413 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-28 09:25:54.424 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-28 09:25:54.429 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-28 09:25:54.445 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-28 09:25:54.445 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-28 17:23:28.553 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-28 17:23:28.566 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-28 17:23:28.579 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-28 17:23:28.592 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-28 17:23:31.289 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-28 17:23:31.297 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-28 17:23:31.306 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-28 17:23:31.322 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-28 17:23:31.323 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-04-30 10:38:03.323 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-04-30 10:38:03.338 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-30 10:38:03.354 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-30 10:38:03.367 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-04-30 10:38:06.220 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-04-30 10:38:06.230 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-04-30 10:38:06.239 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-30 10:38:06.256 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-04-30 10:38:06.257 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-14 18:48:43.461 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-14 18:48:43.505 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-14 18:48:43.541 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-14 18:48:43.571 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-14 18:48:46.971 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-14 18:48:47.001 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-14 18:48:47.011 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-14 18:48:47.040 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-14 18:48:47.042 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-15 13:20:26.062 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-15 13:20:26.113 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-15 13:20:26.150 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-15 13:20:26.175 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-15 13:20:29.459 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-15 13:20:29.496 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-15 13:20:29.507 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-15 13:20:29.542 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-15 13:20:29.542 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-22 17:01:46.901 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-22 17:01:46.950 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-22 17:01:46.981 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-22 17:01:47.007 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-22 17:01:50.632 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-22 17:01:50.667 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-22 17:01:50.677 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-22 17:01:50.708 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-22 17:01:50.709 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-22 18:29:26.300 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-22 18:29:26.336 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-22 18:29:26.348 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-22 18:29:26.378 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-22 18:29:29.886 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-22 18:29:29.920 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-22 18:29:29.931 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-22 18:29:29.965 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-22 18:29:29.966 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-23 20:37:45.750 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-23 20:37:45.772 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-23 20:37:45.785 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-23 20:37:45.797 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-23 20:37:50.657 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-23 20:37:50.666 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-23 20:37:50.676 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-23 20:37:50.691 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-23 20:37:50.692 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-26 12:51:44.583 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-26 12:51:44.593 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-26 12:51:44.603 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-26 12:51:44.617 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-26 12:51:48.608 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-26 12:51:48.617 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-26 12:51:48.626 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-26 12:51:48.644 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-26 12:51:48.645 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-29 09:55:20.513 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-29 09:55:20.539 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 09:55:20.561 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-29 09:55:20.574 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-29 09:55:24.345 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-29 09:55:24.352 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 09:55:24.362 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-29 09:55:24.380 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-29 09:55:24.380 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-29 12:34:32.877 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-29 12:34:32.885 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:34:32.896 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-29 12:34:32.908 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-29 12:34:35.697 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-29 12:34:35.707 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:34:35.720 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-29 12:34:35.740 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe
+[2026-05-29 12:34:35.741 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe args=
+[2026-05-29 12:39:59.725 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-29 12:39:59.733 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:39:59.748 +08:00] [START.PS1] Existing app candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe (2026-04-16T14:06:54); D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe (2026-05-29T12:32:54)
+[2026-05-29 12:39:59.756 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:39:59.767 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-29 12:40:02.290 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-29 12:40:02.300 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:40:02.316 +08:00] [START.PS1] Existing app candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe (2026-04-16T14:06:54); D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe (2026-05-29T12:32:54)
+[2026-05-29 12:40:02.323 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:40:02.338 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 12:40:02.340 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe args=
+[2026-05-29 13:52:15.617 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=False dryRun=False postInstallSelfTest=False
+[2026-05-29 13:52:15.626 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 13:52:15.640 +08:00] [START.PS1] Existing app candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe (2026-04-16T14:06:54); D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe (2026-05-29T13:39:37)
+[2026-05-29 13:52:15.648 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 13:52:15.659 +08:00] [START.PS1] Requesting elevation via powershell. args=-ExecutionPolicy Bypass -File "D:\wireguard switch\scripts\start.ps1" -Elevated -LauncherLogPath "D:\wireguard switch\logs\start.ps1.log"
+[2026-05-29 13:52:18.216 +08:00] [START.PS1] Startup. repoRoot=D:\wireguard switch elevated=True dryRun=False postInstallSelfTest=False
+[2026-05-29 13:52:18.227 +08:00] [START.PS1] App candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe; D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 13:52:18.241 +08:00] [START.PS1] Existing app candidates: D:\wireguard switch\WireguardSplitTunnel\WireguardSplitTunnel.App.exe (2026-04-16T14:06:54); D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe (2026-05-29T13:39:37)
+[2026-05-29 13:52:18.250 +08:00] [START.PS1] Resolved app exe: D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 13:52:18.265 +08:00] [START.PS1] Unblocked app file: D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe
+[2026-05-29 13:52:18.266 +08:00] [START.PS1] Launching exe. path=D:\wireguard switch\src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe args=

@@ -13,6 +13,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{292FBD37
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WireguardSplitTunnel.Core.Tests", "tests\WireguardSplitTunnel.Core.Tests\WireguardSplitTunnel.Core.Tests.csproj", "{B68EE365-8C64-4DC5-B033-A80F9B232798}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WireguardSplitTunnel.MacApp", "src\WireguardSplitTunnel.MacApp\WireguardSplitTunnel.MacApp.csproj", "{7032CCE8-F5AF-4EC5-B1F1-2BD7AF5B191D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -34,10 +36,15 @@ Global
 		{B68EE365-8C64-4DC5-B033-A80F9B232798}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B68EE365-8C64-4DC5-B033-A80F9B232798}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B68EE365-8C64-4DC5-B033-A80F9B232798}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7032CCE8-F5AF-4EC5-B1F1-2BD7AF5B191D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7032CCE8-F5AF-4EC5-B1F1-2BD7AF5B191D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7032CCE8-F5AF-4EC5-B1F1-2BD7AF5B191D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7032CCE8-F5AF-4EC5-B1F1-2BD7AF5B191D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{D97F3C5C-EE9E-4EA6-8F74-AAB4DCEB01A5} = {0714C2A7-5D0E-43C8-920D-0A0BA8D6FAE4}
 		{8BFC3C65-43CD-4284-B5EB-4FB564F7A27A} = {0714C2A7-5D0E-43C8-920D-0A0BA8D6FAE4}
 		{B68EE365-8C64-4DC5-B033-A80F9B232798} = {292FBD37-3A0C-4292-BC04-357BA54E3382}
+		{7032CCE8-F5AF-4EC5-B1F1-2BD7AF5B191D} = {0714C2A7-5D0E-43C8-920D-0A0BA8D6FAE4}
 	EndGlobalSection
 EndGlobal
