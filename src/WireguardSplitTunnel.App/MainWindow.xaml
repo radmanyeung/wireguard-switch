@@ -176,6 +176,7 @@
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right">
                         <Button x:Name="AddSoftwareRuleButton" Content="Add Software" MinWidth="120" Margin="0,0,8,0" Padding="10,6" />
+                        <Button x:Name="PickRunningAppButton" Content="Pick Running App" MinWidth="140" Margin="0,0,8,0" Padding="10,6" />
                         <Button x:Name="ToggleSoftwareEnabledButton" Content="Toggle Enabled" MinWidth="120" Margin="0,0,8,0" Padding="10,6" />
                         <Button x:Name="ToggleSubprocessButton" Content="Toggle Subprocess" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />
                         <Button x:Name="DeleteSoftwareRuleButton" Content="Delete Selected" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />

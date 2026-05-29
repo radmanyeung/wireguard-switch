@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly IRouteService routeService = new RouteService();
     private readonly ISoftwarePolicyService softwarePolicyService = new SoftwareFirewallPolicyService();
     private readonly ISoftwareExecutableLocator softwareExecutableLocator = new SystemSoftwareExecutableLocator();
+    private readonly IRunningSoftwareDiscovery runningSoftwareDiscovery = new SystemRunningSoftwareDiscovery();
     private readonly IAppLogger logger;
     private readonly StateStore stateStore;
     private readonly StateStore appliedStateStore;
@@ -88,6 +89,7 @@ public partial class MainWindow : Window
         SelfTestButton.Click += OnSelfTestClicked;
 
         AddSoftwareRuleButton.Click += OnAddSoftwareRuleClicked;
+        PickRunningAppButton.Click += OnPickRunningAppClicked;
         ToggleSoftwareEnabledButton.Click += OnToggleSoftwareEnabledClicked;
         ToggleSubprocessButton.Click += OnToggleSubprocessClicked;
         DeleteSoftwareRuleButton.Click += OnDeleteSoftwareRuleClicked;
@@ -1192,6 +1194,64 @@ public partial class MainWindow : Window
         stateStore.Save(state);
         RefreshSoftwareGrid();
         MessageBox.Show(this, $"Software add completed. Added: {added}, skipped: {skipped}.", "Wireguard Split Tunnel");
+    }
+
+    private void OnPickRunningAppClicked(object sender, RoutedEventArgs e)
+    {
+        IReadOnlyList<RunningSoftwareCandidate> candidates;
+        try
+        {
+            candidates = runningSoftwareDiscovery.DiscoverRunningSoftware();
+        }
+        catch (Exception ex)
+        {
+            logger.Error("Running app discovery failed.", ex);
+            MessageBox.Show(this, $"Could not list running apps: {ex.Message}", "Wireguard Split Tunnel");
+            return;
+        }
+
+        var dialog = new RunningSoftwarePickerWindow(candidates)
+        {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        var added = 0;
+        var skipped = 0;
+        var invalid = 0;
+        foreach (var candidate in dialog.SelectedCandidates)
+        {
+            if (string.IsNullOrWhiteSpace(candidate.ExecutablePath) || !File.Exists(candidate.ExecutablePath))
+            {
+                invalid++;
+                continue;
+            }
+
+            if (SoftwareRuleMutations.TryAddSoftwareRule(
+                state,
+                candidate.ProcessName,
+                DomainRouteMode.UseWireGuard,
+                includeSubprocesses: true,
+                candidate.ExecutablePath))
+            {
+                added++;
+            }
+            else
+            {
+                skipped++;
+            }
+        }
+
+        stateStore.Save(state);
+        RefreshSoftwareGrid();
+        MessageBox.Show(
+            this,
+            $"Running app add completed. Added: {added}, skipped existing: {skipped}, skipped invalid: {invalid}.",
+            "Wireguard Split Tunnel");
     }
 
     private void OnToggleSoftwareEnabledClicked(object sender, RoutedEventArgs e)
