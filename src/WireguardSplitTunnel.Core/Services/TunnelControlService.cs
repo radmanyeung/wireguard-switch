@@ -119,10 +119,7 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         }
 
         var wgQuick = ResolveWgQuick();
-        var script = new StringBuilder();
-        // Bring down a same-named tunnel first so re-applies are idempotent.
-        script.AppendLine($"{wgQuick} down \"{configPath}\" >/dev/null 2>&1 || true");
-        script.AppendLine($"{wgQuick} up \"{configPath}\"");
+        var script = BuildInstallAndStartScript(wgQuick, configPath, DiscoverActiveTunnelNames());
 
         return RunBatchAsync(script.ToString(), "WireGuard split tunnel needs to start the tunnel", cancellationToken);
     }
@@ -162,4 +159,66 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         throw new FileNotFoundException(
             "wg-quick not found. Install WireGuard tools via 'brew install wireguard-tools'.");
     }
+
+    internal static string BuildInstallAndStartScript(
+        string wgQuick,
+        string configPath,
+        IEnumerable<string> activeTunnelNames)
+    {
+        var script = new StringBuilder();
+        foreach (var tunnelName in activeTunnelNames
+                     .Where(name => !string.IsNullOrWhiteSpace(name))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            script.AppendLine($"{wgQuick} down {ShellQuote(tunnelName)} >/dev/null 2>&1 || true");
+        }
+
+        // Bring down a same-named tunnel first so re-applies are idempotent.
+        script.AppendLine($"{wgQuick} down {ShellQuote(configPath)} >/dev/null 2>&1 || true");
+        script.AppendLine($"{wgQuick} up {ShellQuote(configPath)}");
+        return script.ToString();
+    }
+
+    internal static IReadOnlyList<string> DiscoverActiveTunnelNamesFromRunEntries(IEnumerable<string> runEntries)
+    {
+        return runEntries
+            .Select(TryGetTunnelNameFromNameFile)
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList()!;
+    }
+
+    private static IReadOnlyList<string> DiscoverActiveTunnelNames()
+    {
+        const string wgRunDir = "/var/run/wireguard";
+        try
+        {
+            return Directory.Exists(wgRunDir)
+                ? DiscoverActiveTunnelNamesFromRunEntries(Directory.EnumerateFiles(wgRunDir, "*.name"))
+                : [];
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    private static string? TryGetTunnelNameFromNameFile(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        if (!fileName.EndsWith(".name", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var tunnelName = fileName[..^".name".Length];
+        return string.IsNullOrWhiteSpace(tunnelName) ? null : tunnelName;
+    }
+
+    private static string ShellQuote(string value) =>
+        "\"" + value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("$", "\\$", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal) + "\"";
 }

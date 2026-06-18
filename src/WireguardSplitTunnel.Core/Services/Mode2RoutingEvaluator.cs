@@ -34,6 +34,25 @@ public static class Mode2RoutingEvaluator
                 "Mode 2 OR routing is healthy: both WireGuard and bypass /1 routes are present.");
         }
 
+        if (profile == Mode2EffectiveProfile.SoftwarePriority)
+        {
+            if (!wireGuardHalfDefaultsPresent)
+            {
+                var failReasons = new List<string> { "WireGuard /1 routes missing" };
+                if (!bypassHalfDefaultsPresent) failReasons.Add("bypass /1 routes missing");
+                if (defaultViaWireGuard) failReasons.Add("effective default still prefers WireGuard");
+                return new RoutingCompatibility(
+                    profile,
+                    RoutingStatus.Fail,
+                    $"Software-priority mode needs WireGuard /1 routes. Current state: {string.Join("; ", failReasons)}.");
+            }
+
+            return new RoutingCompatibility(
+                profile,
+                RoutingStatus.Pass,
+                "Software-priority routing is operational. Firewall rules enforce per-process routing.");
+        }
+
         var reasons = new List<string>();
         if (!wireGuardHalfDefaultsPresent)
         {
@@ -50,15 +69,7 @@ public static class Mode2RoutingEvaluator
             reasons.Add("effective default still prefers WireGuard");
         }
 
-        if (profile == Mode2EffectiveProfile.SoftwarePriority && !wireGuardHalfDefaultsPresent)
-        {
-            return new RoutingCompatibility(
-                profile,
-                RoutingStatus.Fail,
-                $"Software-priority mode needs WireGuard /1 routes. Current state: {string.Join("; ", reasons)}.");
-        }
-
-        if (profile == Mode2EffectiveProfile.DomainPriority && !bypassHalfDefaultsPresent)
+        if (!bypassHalfDefaultsPresent)
         {
             return new RoutingCompatibility(
                 profile,

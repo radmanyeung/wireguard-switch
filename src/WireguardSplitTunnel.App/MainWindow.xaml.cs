@@ -9,6 +9,9 @@ using System.Text;
 using System.Security.Principal;
 using System.Security.Cryptography;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.VisualBasic;
 using Microsoft.Win32;
 using WireguardSplitTunnel.Core.Models;
@@ -26,6 +29,9 @@ public partial class MainWindow : Window
     private readonly ISoftwarePolicyService softwarePolicyService = new SoftwareFirewallPolicyService();
     private readonly ISoftwareExecutableLocator softwareExecutableLocator = new SystemSoftwareExecutableLocator();
     private readonly IRunningSoftwareDiscovery runningSoftwareDiscovery = new SystemRunningSoftwareDiscovery();
+    private readonly INetworkMonitorService networkMonitorService = new SystemNetworkMonitorService();
+    private readonly DispatcherTimer monitorTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly NetworkGraphHistory monitorGraphHistory = new(TimeSpan.FromSeconds(60));
     private readonly IAppLogger logger;
     private readonly StateStore stateStore;
     private readonly StateStore appliedStateStore;
@@ -38,7 +44,10 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim renewSemaphore = new(1, 1);
     private readonly SemaphoreSlim softwareApplySemaphore = new(1, 1);
     private CancellationTokenSource? softwareReapplyDebounceCts;
+    private CancellationTokenSource? monitorRefreshCts;
     private int softwareApplyInProgress;
+    private int monitorRefreshInProgress;
+    private int monitorRunGeneration;
     private int renewInProgress;
     private volatile bool suppressAutoSoftwareReapply;
     private bool mode2RoutingWarningShownThisSession;
@@ -107,6 +116,9 @@ public partial class MainWindow : Window
         EnableTunnelButton.Click += OnEnableTunnelClicked;
         SaveTempButton.Click += OnSaveTempClicked;
         LoadTempButton.Click += OnLoadTempClicked;
+        StartMonitorButton.Click += OnStartMonitorClicked;
+        StopMonitorButton.Click += OnStopMonitorClicked;
+        MainTabs.SelectionChanged += OnMainTabsSelectionChanged;
 
         TunnelConfigCombo.SelectionChanged += OnTunnelConfigSelectionChanged;
         AutoEnableCheckBox.Checked += OnAutoEnableChanged;
@@ -117,6 +129,8 @@ public partial class MainWindow : Window
 
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
+        monitorTimer.Tick += OnMonitorTimerTick;
+        MonitorGraphCanvas.SizeChanged += OnMonitorGraphCanvasSizeChanged;
     }
     private async void OnWindowClosing(object? sender, CancelEventArgs e)
     {
@@ -124,6 +138,8 @@ public partial class MainWindow : Window
         NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
         softwareReapplyDebounceCts?.Cancel();
+        monitorTimer.Stop();
+        monitorRefreshCts?.Cancel();
 
         if (allowCloseWithoutRestore || !state.RestoreNormalRoutingOnExit)
         {
@@ -202,6 +218,269 @@ public partial class MainWindow : Window
         }
 
         ScheduleSoftwareReapply("network availability changed");
+    }
+
+    private async void OnStartMonitorClicked(object sender, RoutedEventArgs e)
+    {
+        await StartNetworkMonitorAsync();
+    }
+
+    private void OnStopMonitorClicked(object sender, RoutedEventArgs e)
+    {
+        StopNetworkMonitor();
+    }
+
+    private async void OnMainTabsSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!ReferenceEquals(e.Source, MainTabs))
+        {
+            return;
+        }
+
+        var action = MonitorTabAutoRunPolicy.GetAction(
+            wasMonitorTabSelected: e.RemovedItems.Contains(MonitorTabItem),
+            isMonitorTabSelected: ReferenceEquals(MainTabs.SelectedItem, MonitorTabItem));
+
+        if (action == MonitorTabAutoRunAction.Start)
+        {
+            await StartNetworkMonitorAsync();
+        }
+        else if (action == MonitorTabAutoRunAction.Stop)
+        {
+            StopNetworkMonitor();
+        }
+    }
+
+    private async Task StartNetworkMonitorAsync()
+    {
+        if (monitorTimer.IsEnabled)
+        {
+            return;
+        }
+
+        var generation = Interlocked.Increment(ref monitorRunGeneration);
+        StartMonitorButton.IsEnabled = false;
+        StopMonitorButton.IsEnabled = true;
+        MonitorStatusText.Text = "Monitor: Starting...";
+        monitorTimer.Start();
+        await RefreshNetworkMonitorAsync(generation);
+    }
+
+    private void StopNetworkMonitor()
+    {
+        Interlocked.Increment(ref monitorRunGeneration);
+        monitorTimer.Stop();
+        monitorRefreshCts?.Cancel();
+        StartMonitorButton.IsEnabled = true;
+        StopMonitorButton.IsEnabled = false;
+        MonitorStatusText.Text = "Monitor: Stopped";
+    }
+
+    private async void OnMonitorTimerTick(object? sender, EventArgs e)
+    {
+        await RefreshNetworkMonitorAsync(Volatile.Read(ref monitorRunGeneration));
+    }
+
+    private void OnMonitorGraphCanvasSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        RenderNetworkMonitorGraph();
+    }
+
+    private async Task RefreshNetworkMonitorAsync(int generation)
+    {
+        if (Interlocked.CompareExchange(ref monitorRefreshInProgress, 1, 0) != 0)
+        {
+            return;
+        }
+
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var previous = Interlocked.Exchange(ref monitorRefreshCts, cts);
+        previous?.Dispose();
+
+        try
+        {
+            detector.TryGetActiveInterface(out var wireGuardInterfaceName);
+            var snapshot = await networkMonitorService.CaptureAsync(
+                state,
+                wireGuardInterfaceName,
+                cts.Token);
+            if (generation != Volatile.Read(ref monitorRunGeneration) || !monitorTimer.IsEnabled)
+            {
+                return;
+            }
+
+            RenderNetworkMonitorSnapshot(snapshot);
+        }
+        catch (OperationCanceledException)
+        {
+            MonitorWarningsText.Text = "Monitor refresh canceled.";
+        }
+        catch (Exception ex)
+        {
+            logger.Error("Network monitor refresh failed.", ex);
+            MonitorWarningsText.Text = $"Monitor refresh failed: {ex.Message}";
+        }
+        finally
+        {
+            if (ReferenceEquals(monitorRefreshCts, cts))
+            {
+                monitorRefreshCts = null;
+            }
+
+            cts.Dispose();
+            Interlocked.Exchange(ref monitorRefreshInProgress, 0);
+        }
+    }
+
+    private void RenderNetworkMonitorSnapshot(NetworkMonitorSnapshot snapshot)
+    {
+        MonitorStatusText.Text = snapshot.WireGuardFound
+            ? $"Monitor: Running | WireGuard: {snapshot.WireGuardInterfaceName} | {snapshot.CapturedAt:HH:mm:ss}"
+            : $"Monitor: Running | WireGuard: not detected | {snapshot.CapturedAt:HH:mm:ss}";
+
+        VpnSpeedText.Text = FormatTrafficRate(snapshot.VpnTraffic);
+        NormalSpeedText.Text = FormatTrafficRate(snapshot.NormalTraffic);
+        var vpnTotalMbps = GetTotalMbps(snapshot.VpnTraffic);
+        var normalTotalMbps = GetTotalMbps(snapshot.NormalTraffic);
+        monitorGraphHistory.Add(new NetworkGraphSample(snapshot.CapturedAt, vpnTotalMbps, normalTotalMbps));
+        VpnTotalText.Text = FormatTrafficStats(snapshot.VpnTraffic, useVpn: true);
+        NormalTotalText.Text = FormatTrafficStats(snapshot.NormalTraffic, useVpn: false);
+        VpnLatencyText.Text = FormatLatency("VPN", snapshot.Quality.VpnLatency);
+        NormalLatencyText.Text = FormatLatency("Normal", snapshot.Quality.NormalLatency);
+        GraphStatsText.Text = $"Mini graph: VPN peak {monitorGraphHistory.GetPeakMbps(useVpn: true):0.0} Mbps / avg30 {monitorGraphHistory.GetAverageMbps(TimeSpan.FromSeconds(30), useVpn: true):0.0} Mbps | Normal peak {monitorGraphHistory.GetPeakMbps(useVpn: false):0.0} Mbps / avg30 {monitorGraphHistory.GetAverageMbps(TimeSpan.FromSeconds(30), useVpn: false):0.0} Mbps";
+        RenderNetworkMonitorGraph();
+
+        MonitorActivityGrid.ItemsSource = snapshot.Activities
+            .Take(200)
+            .Select(row => new MonitorActivityDisplayRow(
+                row.ProcessName,
+                row.DomainOrAddress,
+                row.RemoteEndpoint,
+                row.Route.ToString(),
+                row.Connections,
+                ShortenPath(row.ExecutablePath),
+                row.LastSeen.ToString("HH:mm:ss")))
+            .ToList();
+
+        MonitorWarningsText.Text = snapshot.Warnings.Count == 0
+            ? ""
+            : "Warnings: " + string.Join(" | ", snapshot.Warnings.Take(4));
+    }
+
+    private void RenderNetworkMonitorGraph()
+    {
+        var width = MonitorGraphCanvas.ActualWidth;
+        var height = MonitorGraphCanvas.ActualHeight;
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        VpnGraphLine.Points = ToPointCollection(NetworkGraphNormalizer.Normalize(
+            monitorGraphHistory.Samples,
+            width,
+            height,
+            useVpn: true));
+        NormalGraphLine.Points = ToPointCollection(NetworkGraphNormalizer.Normalize(
+            monitorGraphHistory.Samples,
+            width,
+            height,
+            useVpn: false));
+    }
+
+    private static PointCollection ToPointCollection(IReadOnlyList<NetworkGraphPoint> points)
+    {
+        var collection = new PointCollection();
+        foreach (var point in points)
+        {
+            collection.Add(new Point(point.X, point.Y));
+        }
+
+        return collection;
+    }
+
+    private static string FormatTrafficRate(NetworkTrafficSummary summary)
+    {
+        if (!summary.IsAvailable)
+        {
+            return "Unavailable";
+        }
+
+        return $"Down {FormatBytesPerSecond(summary.DownloadBytesPerSecond)} ({FormatMegabitsPerSecond(summary.DownloadBytesPerSecond)}) | Up {FormatBytesPerSecond(summary.UploadBytesPerSecond)} ({FormatMegabitsPerSecond(summary.UploadBytesPerSecond)})";
+    }
+
+    private string FormatTrafficStats(NetworkTrafficSummary summary, bool useVpn)
+    {
+        if (!summary.IsAvailable)
+        {
+            return "Total: unavailable";
+        }
+
+        var totalMbps = GetTotalMbps(summary);
+        var peak = monitorGraphHistory.GetPeakMbps(useVpn);
+        var average = monitorGraphHistory.GetAverageMbps(TimeSpan.FromSeconds(30), useVpn);
+        return $"Total {totalMbps:0.0} Mbps | Peak {peak:0.0} Mbps | Avg 30s {average:0.0} Mbps";
+    }
+
+    private static string FormatBytesPerSecond(double bytesPerSecond) => $"{FormatBytes(bytesPerSecond)}/s";
+
+    private static string FormatMegabitsPerSecond(double bytesPerSecond) => $"{BytesPerSecondToMbps(bytesPerSecond):0.0} Mbps";
+
+    private static double GetTotalMbps(NetworkTrafficSummary summary)
+    {
+        if (!summary.IsAvailable)
+        {
+            return 0;
+        }
+
+        return BytesPerSecondToMbps(summary.DownloadBytesPerSecond + summary.UploadBytesPerSecond);
+    }
+
+    private static double BytesPerSecondToMbps(double bytesPerSecond) => Math.Max(0, bytesPerSecond) * 8 / 1_000_000;
+
+    private static string FormatLatency(string label, NetworkLatencySummary summary)
+    {
+        if (!summary.IsAvailable)
+        {
+            return $"{label}: Unavailable";
+        }
+
+        var ping = summary.PingMs.HasValue ? $"{summary.PingMs.Value:0} ms" : "Timeout";
+        var jitter = summary.JitterMs.HasValue ? $"{summary.JitterMs.Value:0.0} ms" : "-";
+        return $"{label}: {ping} | Jitter {jitter} | Loss {summary.PacketLossPercent:0}%";
+    }
+
+    private static string FormatBytes(double bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var value = Math.Max(0, bytes);
+        var unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.Length - 1)
+        {
+            value /= 1024;
+            unitIndex++;
+        }
+
+        return unitIndex == 0
+            ? $"{value:0} {units[unitIndex]}"
+            : $"{value:0.0} {units[unitIndex]}";
+    }
+
+    private static string ShortenPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return "";
+        }
+
+        var directory = Path.GetDirectoryName(path);
+        var fileName = Path.GetFileName(path);
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(fileName))
+        {
+            return path;
+        }
+
+        return $"{directory}\\...\\{fileName}";
     }
 
     private void ScheduleSoftwareReapply(string reason)
@@ -1313,6 +1592,7 @@ public partial class MainWindow : Window
         }
 
         var added = 0;
+        var updated = 0;
         var skipped = 0;
         var invalid = 0;
         foreach (var candidate in dialog.SelectedCandidates)
@@ -1323,18 +1603,28 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            if (SoftwareRuleMutations.TryAddSoftwareRule(
+            var result = SoftwareRuleMutations.UpsertSoftwareRulePath(
                 state,
                 candidate.ProcessName,
                 DomainRouteMode.UseWireGuard,
                 includeSubprocesses: true,
-                candidate.ExecutablePath))
+                candidate.ExecutablePath);
+
+            if (result == SoftwareRulePathMutationResult.Added)
             {
                 added++;
             }
-            else
+            else if (result == SoftwareRulePathMutationResult.Updated)
+            {
+                updated++;
+            }
+            else if (result == SoftwareRulePathMutationResult.SkippedExisting)
             {
                 skipped++;
+            }
+            else
+            {
+                invalid++;
             }
         }
 
@@ -1342,7 +1632,7 @@ public partial class MainWindow : Window
         RefreshSoftwareGrid();
         MessageBox.Show(
             this,
-            $"Running app add completed. Added: {added}, skipped existing: {skipped}, skipped invalid: {invalid}.",
+            $"Running app add completed. Added: {added}, updated paths: {updated}, skipped existing: {skipped}, skipped invalid: {invalid}.",
             "Wireguard Split Tunnel");
     }
 
@@ -1354,7 +1644,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        SoftwareRuleMutations.TrySetEnabled(state, selected.ProcessName, !selected.Enabled);
+        SoftwareRuleMutations.TrySetEnabled(state, selected.ProcessName, selected.ExecutablePath, !selected.Enabled);
         stateStore.Save(state);
         RefreshSoftwareGrid();
     }
@@ -1367,14 +1657,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        var list = state.SoftwareRules ?? [];
-        var index = list.FindIndex(rule => string.Equals(rule.ProcessName, selected.ProcessName, StringComparison.OrdinalIgnoreCase));
-        if (index < 0)
+        if (!SoftwareRuleMutations.TrySetIncludeSubprocesses(
+            state,
+            selected.ProcessName,
+            selected.ExecutablePath,
+            !selected.IncludeSubprocesses))
         {
             return;
         }
 
-        list[index] = list[index] with { IncludeSubprocesses = !list[index].IncludeSubprocesses };
         stateStore.Save(state);
         RefreshSoftwareGrid();
     }
@@ -1387,7 +1678,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!SoftwareRuleMutations.Remove(state, selected.ProcessName))
+        if (!SoftwareRuleMutations.Remove(state, selected.ProcessName, selected.ExecutablePath))
         {
             return;
         }
@@ -1452,7 +1743,7 @@ public partial class MainWindow : Window
             defaultViaWireGuard);
 
         var details = new List<string>();
-        var resolvedPathCount = 0;
+        var repairCandidateCount = 0;
         var missingPathCount = 0;
         var firewallMatchedCount = 0;
 
@@ -1461,16 +1752,17 @@ public partial class MainWindow : Window
             var path = rule.ExecutablePath;
             if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
             {
-                if (softwareExecutableLocator.TryResolvePath(rule.ProcessName, out var resolvedPath))
+                var repairCandidates = softwareExecutableLocator.ResolvePaths(rule.ProcessName);
+                if (repairCandidates.Count > 0)
                 {
-                    path = resolvedPath;
-                    resolvedPathCount++;
+                    repairCandidateCount += repairCandidates.Count;
+                    details.Add($"{rule.ProcessName}: STALE/MISSING exe path ({ShortenPath(rule.ExecutablePath)}); Apply Software can repair to {string.Join(", ", repairCandidates.Take(3).Select(ShortenPath))}");
                 }
-            }
+                else
+                {
+                    details.Add($"{rule.ProcessName}: MISSING exe path ({ShortenPath(rule.ExecutablePath)})");
+                }
 
-            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            {
-                details.Add($"{rule.ProcessName}: MISSING exe path");
                 missingPathCount++;
                 continue;
             }
@@ -1480,11 +1772,11 @@ public partial class MainWindow : Window
             if (matched)
             {
                 firewallMatchedCount++;
-                details.Add($"{rule.ProcessName}: OK (path + firewall)");
+                details.Add($"{rule.ProcessName}: OK ({ShortenPath(path)} + firewall)");
             }
             else
             {
-                details.Add($"{rule.ProcessName}: path OK, firewall rule NOT FOUND (key={key})");
+                details.Add($"{rule.ProcessName}: path OK ({ShortenPath(path)}), firewall rule NOT FOUND (key={key})");
             }
         }
 
@@ -1506,7 +1798,7 @@ public partial class MainWindow : Window
         var sb = new StringBuilder();
         sb.AppendLine("Software Self Test Result");
         sb.AppendLine($"Enabled software rules: {enabledRules.Count}");
-        sb.AppendLine($"Resolved exe path now: {resolvedPathCount}");
+        sb.AppendLine($"Repair candidates found: {repairCandidateCount}");
         sb.AppendLine($"Missing exe path: {missingPathCount}");
         sb.AppendLine($"Firewall rules found (WGST-Software-*): {(firewallQueryError is null ? firewallRuleNames.Count.ToString() : "N/A")}");
         sb.AppendLine($"Rules matched by key: {firewallMatchedCount}/{expectedMatchCount}");
@@ -1537,7 +1829,7 @@ public partial class MainWindow : Window
             sb.AppendLine($"- ... ({details.Count - 20} more)");
         }
 
-        logger.Info($"Software self test completed. enabled={enabledRules.Count}, resolvedPathNow={resolvedPathCount}, missingPath={missingPathCount}, fwCount={firewallRuleNames.Count}, matched={firewallMatchedCount}, profile={routingCompatibility.Profile}, routingStatus={selfTestStatus}, defaultViaWg={defaultViaWireGuard}, wgHalf={hasWireGuardHalfDefaults}, bypassHalf={hasBypassHalfDefaults}, firewallQueryError={(firewallQueryError is null ? "none" : firewallQueryError)}.");
+        logger.Info($"Software self test completed. enabled={enabledRules.Count}, repairCandidates={repairCandidateCount}, missingPath={missingPathCount}, fwCount={firewallRuleNames.Count}, matched={firewallMatchedCount}, profile={routingCompatibility.Profile}, routingStatus={selfTestStatus}, defaultViaWg={defaultViaWireGuard}, wgHalf={hasWireGuardHalfDefaults}, bypassHalf={hasBypassHalfDefaults}, firewallQueryError={(firewallQueryError is null ? "none" : firewallQueryError)}.");
         MessageBox.Show(this, sb.ToString(), "Software Self Test");
     }
 
@@ -1730,31 +2022,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            var enabledRules = (state.SoftwareRules ?? [])
-                .Where(rule => rule.Enabled)
-                .ToList();
-
-            var autoFixed = 0;
-            var unresolved = new List<string>();
-            foreach (var rule in enabledRules)
-            {
-                if (!string.IsNullOrWhiteSpace(rule.ExecutablePath) && File.Exists(rule.ExecutablePath))
-                {
-                    continue;
-                }
-
-                if (softwareExecutableLocator.TryResolvePath(rule.ProcessName, out var resolvedPath))
-                {
-                    if (SoftwareRuleMutations.TrySetExecutablePath(state, rule.ProcessName, resolvedPath))
-                    {
-                        autoFixed++;
-                    }
-                }
-                else
-                {
-                    unresolved.Add(rule.ProcessName);
-                }
-            }
+            var repairResult = SoftwareRulePathRepair.RepairEnabledRulePaths(state, softwareExecutableLocator);
 
             stateStore.Save(state);
 
@@ -1789,9 +2057,9 @@ public partial class MainWindow : Window
                 verification = await VerifySoftwareRulesAppliedAsync(effectiveRules);
             }
 
-            var unresolvedText = unresolved.Count == 0
+            var unresolvedText = repairResult.UnresolvedProcessNames.Count == 0
                 ? ""
-                : $"\nUnresolved path skipped: {string.Join(", ", unresolved.Distinct(StringComparer.OrdinalIgnoreCase))}";
+                : $"\nUnresolved path skipped ({repairResult.UnresolvedProcessNames.Count}): {string.Join(", ", repairResult.UnresolvedProcessNames.Distinct(StringComparer.OrdinalIgnoreCase))}";
             var verificationText = $"\nVerification: {verification.Detail}";
             var routingText = routingCompatibility.Status == RoutingStatus.Pass
                 ? "\nRouting: PASS"
@@ -1800,7 +2068,7 @@ public partial class MainWindow : Window
             if (showMessage)
             {
                 MessageBox.Show(this,
-                    $"Software apply completed ({triggerReason}). Enabled: {effectiveRules.Count}, auto-fixed paths: {autoFixed}.{unresolvedText}{verificationText}{routingText}\n(Requires Administrator approval)",
+                    $"Software apply completed ({triggerReason}). Enabled: {effectiveRules.Count}, auto-added paths: {repairResult.Added}, auto-updated paths: {repairResult.Updated}.{unresolvedText}{verificationText}{routingText}\n(Requires Administrator approval)",
                     "Wireguard Split Tunnel");
             }
 
@@ -1810,7 +2078,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                logger.Info($"Software apply completed ({triggerReason}). enabled={effectiveRules.Count}, autoFixed={autoFixed}, unresolved={unresolved.Count}, verify={(verification.Verified ? "ok" : "unknown")}.");
+                logger.Info($"Software apply completed ({triggerReason}). enabled={effectiveRules.Count}, autoAdded={repairResult.Added}, autoUpdated={repairResult.Updated}, unresolved={repairResult.UnresolvedProcessNames.Count}, verify={(verification.Verified ? "ok" : "unknown")}.");
             }
         }
         finally
@@ -1859,8 +2127,11 @@ public partial class MainWindow : Window
             .Select(rule => new SoftwareRow(
                 rule.ProcessName,
                 rule.Enabled,
-                rule.IncludeSubprocesses))
+                rule.IncludeSubprocesses,
+                rule.ExecutablePath,
+                ShortenPath(rule.ExecutablePath)))
             .OrderBy(row => row.ProcessName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.ExecutablePath, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         SoftwareRulesGrid.ItemsSource = rows;
@@ -2464,6 +2735,14 @@ public partial class MainWindow : Window
     private sealed record DefaultRouteEntry(string Destination, string Netmask, string Gateway, string InterfaceIp, int Metric);
     private sealed record Ipv4RouteEntry(string Destination, string Netmask, string Gateway, string InterfaceIp, int Metric);
     private sealed record DomainRow(string Domain, bool Enabled, int ResolvedIpCount);
-    private sealed record SoftwareRow(string ProcessName, bool Enabled, bool IncludeSubprocesses);
+    private sealed record SoftwareRow(string ProcessName, bool Enabled, bool IncludeSubprocesses, string? ExecutablePath, string ShortPath);
+    private sealed record MonitorActivityDisplayRow(
+        string ProcessName,
+        string DomainOrAddress,
+        string RemoteEndpoint,
+        string Route,
+        int Connections,
+        string ShortPath,
+        string LastSeen);
     private sealed record TunnelConfigOption(string Path, string Display);
 }

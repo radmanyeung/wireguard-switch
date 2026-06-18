@@ -65,6 +65,15 @@ public sealed class SystemWireguardDetector : IWireguardDetector
                     // unreadable mapping — try next
                 }
             }
+
+            foreach (var socketFile in Directory.EnumerateFiles(wgRunDir, "*.sock"))
+            {
+                if (TryParseMacWireGuardSocketInterface(socketFile, out var utun) && IsInterfaceUp(utun))
+                {
+                    interfaceName = utun;
+                    return true;
+                }
+            }
         }
 
         // Fallback: pick the first up "utun" interface that has a peer-style point-to-point IPv4
@@ -83,6 +92,27 @@ public sealed class SystemWireguardDetector : IWireguardDetector
 
         interfaceName = string.Empty;
         return false;
+    }
+
+    internal static bool TryParseMacWireGuardSocketInterface(string socketPath, out string interfaceName)
+    {
+        var fileName = Path.GetFileName(socketPath);
+        if (!fileName.EndsWith(".sock", StringComparison.OrdinalIgnoreCase))
+        {
+            interfaceName = string.Empty;
+            return false;
+        }
+
+        var candidate = fileName[..^".sock".Length];
+        if (!candidate.StartsWith("utun", StringComparison.OrdinalIgnoreCase)
+            || !candidate[4..].All(char.IsDigit))
+        {
+            interfaceName = string.Empty;
+            return false;
+        }
+
+        interfaceName = candidate;
+        return true;
     }
 
     private static bool IsInterfaceUp(string name)

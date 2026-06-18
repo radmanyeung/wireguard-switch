@@ -125,7 +125,7 @@
                        Foreground="#1E3A8A" />
         </Border>
 
-        <TabControl Grid.Row="3">
+        <TabControl x:Name="MainTabs" Grid.Row="3">
             <TabItem Header="Domain Rules">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
@@ -181,6 +181,7 @@
                             <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="*" />
                             <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="90" />
                             <DataGridCheckBoxColumn Header="Subprocess" Binding="{Binding IncludeSubprocesses}" Width="110" />
+                            <DataGridTextColumn Header="Path" Binding="{Binding ShortPath}" Width="2*" />
                         </DataGrid.Columns>
                     </DataGrid>
 
@@ -196,6 +197,139 @@
                         <Button x:Name="ApplySoftwareButton" Content="Apply Software" MinWidth="130" Margin="0,0,8,0" Padding="10,6" />
                         <Button x:Name="SoftwareSelfTestButton" Content="Software Self Test" MinWidth="150" Padding="10,6" />
                     </StackPanel>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="MonitorTabItem" Header="Monitor">
+                <Grid Margin="10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <Button x:Name="StartMonitorButton" Content="Start Monitor" MinWidth="120" Margin="0,0,8,0" Padding="10,6" />
+                            <Button x:Name="StopMonitorButton" Content="Stop Monitor" MinWidth="120" Padding="10,6" IsEnabled="False" />
+                        </StackPanel>
+                        <TextBlock x:Name="MonitorStatusText"
+                                   Text="Monitor: Stopped"
+                                   VerticalAlignment="Center"
+                                   FontSize="14"
+                                   FontWeight="SemiBold"
+                                   Foreground="#1F2937" />
+                    </DockPanel>
+
+                    <Grid Grid.Row="1" Margin="0,12,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                Margin="0,0,8,0"
+                                Padding="12"
+                                CornerRadius="10"
+                                Background="#ECFDF5"
+                                BorderBrush="#A7F3D0"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="VPN / WireGuard" FontWeight="SemiBold" Foreground="#065F46" />
+                                <TextBlock x:Name="VpnSpeedText" Text="Down 0 B/s | Up 0 B/s" Margin="0,8,0,0" FontSize="18" FontWeight="SemiBold" />
+                                <TextBlock x:Name="VpnTotalText" Text="Total: 0 B down / 0 B up" Margin="0,4,0,0" Foreground="#047857" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="1"
+                                Margin="8,0,0,0"
+                                Padding="12"
+                                CornerRadius="10"
+                                Background="#EFF6FF"
+                                BorderBrush="#BFDBFE"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Normal Network" FontWeight="SemiBold" Foreground="#1D4ED8" />
+                                <TextBlock x:Name="NormalSpeedText" Text="Down 0 B/s | Up 0 B/s" Margin="0,8,0,0" FontSize="18" FontWeight="SemiBold" />
+                                <TextBlock x:Name="NormalTotalText" Text="Total: 0 B down / 0 B up" Margin="0,4,0,0" Foreground="#2563EB" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <Grid Grid.Row="2" Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="320" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0"
+                                Margin="0,0,8,0"
+                                Padding="12"
+                                CornerRadius="10"
+                                Background="#FFF7ED"
+                                BorderBrush="#FED7AA"
+                                BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="Latency" FontWeight="SemiBold" Foreground="#9A3412" />
+                                <TextBlock x:Name="VpnLatencyText" Text="VPN: Unavailable" Margin="0,8,0,0" FontWeight="SemiBold" />
+                                <TextBlock x:Name="NormalLatencyText" Text="Normal: Unavailable" Margin="0,4,0,0" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="1"
+                                Margin="8,0,0,0"
+                                Padding="12"
+                                CornerRadius="10"
+                                Background="#F8FAFC"
+                                BorderBrush="#CBD5E1"
+                                BorderThickness="1">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="110" />
+                                </Grid.RowDefinitions>
+                                <TextBlock x:Name="GraphStatsText"
+                                           Text="Mini graph: waiting for monitor samples"
+                                           FontWeight="SemiBold"
+                                           Foreground="#334155" />
+                                <Canvas x:Name="MonitorGraphCanvas"
+                                        Grid.Row="1"
+                                        Margin="0,8,0,0"
+                                        ClipToBounds="True"
+                                        Background="#FFFFFF">
+                                    <Polyline x:Name="VpnGraphLine" Stroke="#10B981" StrokeThickness="2" />
+                                    <Polyline x:Name="NormalGraphLine" Stroke="#2563EB" StrokeThickness="2" />
+                                </Canvas>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <DataGrid Grid.Row="3"
+                              x:Name="MonitorActivityGrid"
+                              AutoGenerateColumns="False"
+                              IsReadOnly="True"
+                              HeadersVisibility="Column"
+                              CanUserAddRows="False"
+                              RowHeaderWidth="0">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="150" />
+                            <DataGridTextColumn Header="Domain / IP" Binding="{Binding DomainOrAddress}" Width="*" />
+                            <DataGridTextColumn Header="Remote" Binding="{Binding RemoteEndpoint}" Width="170" />
+                            <DataGridTextColumn Header="Route" Binding="{Binding Route}" Width="90" />
+                            <DataGridTextColumn Header="Conns" Binding="{Binding Connections}" Width="70" />
+                            <DataGridTextColumn Header="Path" Binding="{Binding ShortPath}" Width="220" />
+                            <DataGridTextColumn Header="Last Seen" Binding="{Binding LastSeen}" Width="110" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+
+                    <TextBlock Grid.Row="4"
+                               x:Name="MonitorWarningsText"
+                               Margin="0,10,0,0"
+                               Text=""
+                               TextWrapping="Wrap"
+                               Foreground="#92400E" />
                 </Grid>
             </TabItem>
         </TabControl>

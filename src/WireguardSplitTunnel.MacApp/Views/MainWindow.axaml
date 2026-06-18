@@ -4,65 +4,175 @@
         x:Class="WireguardSplitTunnel.MacApp.Views.MainWindow"
         x:DataType="vm:MainWindowState"
         Title="WireGuard Split Tunnel"
-        Width="720" Height="560"
-        MinWidth="640" MinHeight="480">
-  <Grid Margin="14" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto" ColumnDefinitions="*">
+        Width="1120" Height="740"
+        MinWidth="920" MinHeight="620">
+  <Grid Margin="16" RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="*">
+    <TextBlock Grid.Row="0"
+               Text="WireGuard Split Tunnel"
+               FontSize="24"
+               FontWeight="SemiBold" />
 
-    <!-- tunnel row -->
-    <Border Grid.Row="0" Padding="10" CornerRadius="6" BorderThickness="1" BorderBrush="#33808080">
-      <StackPanel Orientation="Vertical" Spacing="6">
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <TextBlock Text="Config:" VerticalAlignment="Center" FontWeight="SemiBold"/>
-          <TextBlock Name="ConfigPathText" Text="(none)" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MinWidth="200"/>
-          <Button Name="PickConfigButton" Content="Pick…" Click="OnPickConfigClick"/>
-          <Button Name="EnableTunnelButton" Content="Enable Tunnel" Click="OnEnableTunnelClick"/>
-          <Button Name="DisableTunnelButton" Content="Disable" Click="OnDisableTunnelClick"/>
-        </StackPanel>
-        <StackPanel Orientation="Horizontal" Spacing="8">
-          <TextBlock Text="Status:" VerticalAlignment="Center" FontWeight="SemiBold"/>
-          <TextBlock Name="TunnelStatusText" Text="not connected" Foreground="#888"/>
-        </StackPanel>
-      </StackPanel>
-    </Border>
-
-    <!-- spacer -->
-    <Rectangle Grid.Row="1" Height="10"/>
-
-    <!-- domain input -->
-    <Border Grid.Row="2" Padding="10" CornerRadius="6" BorderThickness="1" BorderBrush="#33808080">
-      <Grid ColumnDefinitions="*,Auto,Auto">
-        <TextBox Grid.Column="0" Name="NewDomainBox" Watermark="example.com" Margin="0,0,8,0"/>
-        <Button Grid.Column="1" Content="Add Domain" Click="OnAddDomainClick" Margin="0,0,8,0"/>
-        <Button Grid.Column="2" Content="Apply Routes" Click="OnApplyRoutesClick" Background="#306030" Foreground="White"/>
+    <Border Grid.Row="1"
+            Margin="0,12,0,12"
+            Padding="10"
+            CornerRadius="8"
+            BorderThickness="1"
+            BorderBrush="#33808080">
+      <Grid ColumnDefinitions="Auto,*">
+        <TextBlock Text="Status:" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,8,0"/>
+        <TextBlock Grid.Column="1" Name="TunnelStatusText" Text="not connected" Foreground="#888" VerticalAlignment="Center"/>
       </Grid>
     </Border>
 
-    <!-- header -->
-    <Grid Grid.Row="3" Margin="2,12,2,4" ColumnDefinitions="60,*,Auto,Auto">
-      <TextBlock Grid.Column="0" Text="Enabled" FontWeight="SemiBold"/>
-      <TextBlock Grid.Column="1" Text="Domain" FontWeight="SemiBold"/>
-      <TextBlock Grid.Column="2" Text="Resolved IPs" FontWeight="SemiBold" Margin="0,0,12,0"/>
-      <TextBlock Grid.Column="3" Text="" FontWeight="SemiBold"/>
-    </Grid>
+    <TabControl Grid.Row="2" Name="MainTabs" SelectionChanged="OnMainTabsSelectionChanged">
+      <TabItem Header="Tunnel">
+        <Grid Margin="4,12,4,4" RowDefinitions="Auto,Auto,*">
+          <Border Grid.Row="0" Padding="12" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+            <StackPanel Spacing="10">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Text="Config:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
+                <TextBlock Grid.Column="1" Name="ConfigPathText" Text="(none)" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                <Button Grid.Column="2" Name="PickConfigButton" Content="Pick..." Click="OnPickConfigClick" MinWidth="90"/>
+              </Grid>
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Name="EnableTunnelButton" Content="Enable Tunnel" Click="OnEnableTunnelClick" MinWidth="130"/>
+                <Button Name="DisableTunnelButton" Content="Disable Tunnel" Click="OnDisableTunnelClick" MinWidth="130"/>
+                <Button Content="Refresh Status" Click="OnRefreshStatusClick" MinWidth="120"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
 
-    <!-- list -->
-    <Border Grid.Row="4" CornerRadius="6" BorderThickness="1" BorderBrush="#33808080">
-      <ListBox Name="DomainList" Background="Transparent" SelectionMode="Single">
-        <ListBox.ItemTemplate>
-          <DataTemplate x:DataType="vm:DomainRuleRow">
-            <Grid ColumnDefinitions="60,*,260,Auto" VerticalAlignment="Center">
-              <CheckBox Grid.Column="0" IsChecked="{Binding Enabled, Mode=TwoWay}"/>
-              <TextBlock Grid.Column="1" Text="{Binding Domain}" VerticalAlignment="Center"/>
-              <TextBlock Grid.Column="2" Text="{Binding ResolvedSummary}" Foreground="#888" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-              <Button Grid.Column="3" Content="✕" Click="OnRemoveDomainClick" Tag="{Binding Domain}" Width="32" Padding="0"/>
+          <TextBlock Grid.Row="1"
+                     Margin="0,12,0,0"
+                     Text="macOS uses wg-quick and will prompt for administrator approval when routes or tunnels are changed."
+                     Foreground="#666"
+                     TextWrapping="Wrap"/>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Domain Rules">
+        <Grid Margin="4,12,4,4" RowDefinitions="Auto,Auto,*,Auto">
+          <Border Grid.Row="0" Padding="12" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+            <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto">
+              <TextBox Grid.Column="0" Name="NewDomainBox" Watermark="example.com or *.example.com"/>
+              <Button Grid.Column="1" Content="Add Domain" Click="OnAddDomainClick" MinWidth="110"/>
+              <ComboBox Grid.Column="2" Name="PresetCombo" SelectedIndex="3" MinWidth="150">
+                <ComboBoxItem Content="OpenAI / ChatGPT"/>
+                <ComboBoxItem Content="Claude"/>
+                <ComboBoxItem Content="Google AI"/>
+                <ComboBoxItem Content="AI Services Bundle"/>
+              </ComboBox>
+              <Button Grid.Column="3" Content="Add Preset" Click="OnAddPresetClick" MinWidth="110"/>
+              <Button Grid.Column="4" Content="Apply Routes" Click="OnApplyRoutesClick" Background="#306030" Foreground="White" MinWidth="120"/>
             </Grid>
-          </DataTemplate>
-        </ListBox.ItemTemplate>
-      </ListBox>
-    </Border>
+          </Border>
 
-    <!-- log -->
-    <Border Grid.Row="5" Margin="0,10,0,0" Padding="8" CornerRadius="4" Background="#15808080">
+          <Grid Grid.Row="1" Margin="2,12,2,4" ColumnDefinitions="80,*,260,Auto">
+            <TextBlock Grid.Column="0" Text="Enabled" FontWeight="SemiBold"/>
+            <TextBlock Grid.Column="1" Text="Domain" FontWeight="SemiBold"/>
+            <TextBlock Grid.Column="2" Text="Resolved IPs" FontWeight="SemiBold"/>
+            <TextBlock Grid.Column="3" Text="Action" FontWeight="SemiBold"/>
+          </Grid>
+
+          <Border Grid.Row="2" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+            <ListBox Name="DomainList" Background="Transparent" SelectionMode="Single">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:DomainRuleRow">
+                  <Grid ColumnDefinitions="80,*,260,Auto" VerticalAlignment="Center" Margin="4">
+                    <CheckBox Grid.Column="0"
+                              IsChecked="{Binding Enabled, Mode=TwoWay}"
+                              Click="OnDomainEnabledChanged"
+                              Tag="{Binding Domain}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding Domain}" VerticalAlignment="Center"/>
+                    <TextBlock Grid.Column="2" Text="{Binding ResolvedSummary}" Foreground="#888" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                    <Button Grid.Column="3" Content="Remove" Click="OnRemoveDomainClick" Tag="{Binding Domain}" MinWidth="80"/>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Border>
+
+          <StackPanel Grid.Row="3" Margin="0,12,0,0" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+            <Button Content="Rollback" Click="OnRollbackClick" MinWidth="100"/>
+            <Button Content="Restore Normal Routes" Click="OnRestoreNormalRoutesClick" MinWidth="170"/>
+          </StackPanel>
+        </Grid>
+      </TabItem>
+
+      <TabItem Name="MonitorTabItem" Header="Monitor">
+        <Grid Margin="4,12,4,4" RowDefinitions="Auto,Auto,*,Auto">
+          <DockPanel Grid.Row="0">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
+              <Button Name="StartMonitorButton" Content="Start Monitor" Click="OnStartMonitorClick" MinWidth="120"/>
+              <Button Name="StopMonitorButton" Content="Stop Monitor" Click="OnStopMonitorClick" MinWidth="120" IsEnabled="False"/>
+            </StackPanel>
+            <TextBlock Name="MonitorStatusText" Text="Monitor: Stopped" FontWeight="SemiBold" VerticalAlignment="Center"/>
+          </DockPanel>
+
+          <Grid Grid.Row="1" Margin="0,12,0,12" ColumnDefinitions="*,*,320">
+            <Border Grid.Column="0" Padding="12" CornerRadius="8" Background="#ECFDF5" BorderBrush="#A7F3D0" BorderThickness="1">
+              <StackPanel>
+                <TextBlock Text="VPN / WireGuard" FontWeight="SemiBold" Foreground="#065F46"/>
+                <TextBlock Name="VpnSpeedText" Text="Down 0 B/s | Up 0 B/s" Margin="0,8,0,0" FontSize="16" FontWeight="SemiBold"/>
+                <TextBlock Name="VpnTotalText" Text="Total: 0 B down / 0 B up" Margin="0,4,0,0" Foreground="#047857"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Padding="12" CornerRadius="8" Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1">
+              <StackPanel>
+                <TextBlock Text="Normal Network" FontWeight="SemiBold" Foreground="#1D4ED8"/>
+                <TextBlock Name="NormalSpeedText" Text="Down 0 B/s | Up 0 B/s" Margin="0,8,0,0" FontSize="16" FontWeight="SemiBold"/>
+                <TextBlock Name="NormalTotalText" Text="Total: 0 B down / 0 B up" Margin="0,4,0,0" Foreground="#2563EB"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Padding="12" CornerRadius="8" Background="#FFF7ED" BorderBrush="#FED7AA" BorderThickness="1">
+              <StackPanel>
+                <TextBlock Text="Latency" FontWeight="SemiBold" Foreground="#9A3412"/>
+                <TextBlock Name="VpnLatencyText" Text="VPN: Unavailable" Margin="0,8,0,0" FontWeight="SemiBold"/>
+                <TextBlock Name="NormalLatencyText" Text="Normal: Unavailable" Margin="0,4,0,0" FontWeight="SemiBold"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Grid Grid.Row="2" RowDefinitions="Auto,110,Auto,*">
+            <TextBlock Name="GraphStatsText" Text="Mini graph: waiting for monitor samples" FontWeight="SemiBold"/>
+            <Canvas Name="MonitorGraphCanvas" Grid.Row="1" Margin="0,8,0,12" ClipToBounds="True" Background="#FFFFFF">
+              <Polyline Name="VpnGraphLine" Stroke="#10B981" StrokeThickness="2"/>
+              <Polyline Name="NormalGraphLine" Stroke="#2563EB" StrokeThickness="2"/>
+            </Canvas>
+            <Grid Grid.Row="2" ColumnDefinitions="150,*,170,90,70,220,110" Margin="2,0,2,4">
+              <TextBlock Grid.Column="0" Text="Process" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="1" Text="Domain / IP" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="2" Text="Remote" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="3" Text="Route" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="4" Text="Conns" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="5" Text="Path" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="6" Text="Last Seen" FontWeight="SemiBold"/>
+            </Grid>
+            <Border Grid.Row="3" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+              <ListBox Name="MonitorActivityList" Background="Transparent">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:MonitorActivityRowView">
+                    <Grid ColumnDefinitions="150,*,170,90,70,220,110" VerticalAlignment="Center" Margin="4">
+                      <TextBlock Grid.Column="0" Text="{Binding ProcessName}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="1" Text="{Binding DomainOrAddress}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="2" Text="{Binding RemoteEndpoint}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="3" Text="{Binding Route}"/>
+                      <TextBlock Grid.Column="4" Text="{Binding Connections}"/>
+                      <TextBlock Grid.Column="5" Text="{Binding ShortPath}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="6" Text="{Binding LastSeen}"/>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Border>
+          </Grid>
+
+          <TextBlock Grid.Row="3" Name="MonitorWarningsText" Margin="0,10,0,0" Text="" TextWrapping="Wrap" Foreground="#92400E"/>
+        </Grid>
+      </TabItem>
+    </TabControl>
+
+    <Border Grid.Row="3" Margin="0,10,0,0" Padding="8" CornerRadius="6" Background="#15808080">
       <TextBlock Name="LogText" FontFamily="ui-monospace, Menlo, monospace" FontSize="11" Text="ready" TextWrapping="Wrap"/>
     </Border>
   </Grid>

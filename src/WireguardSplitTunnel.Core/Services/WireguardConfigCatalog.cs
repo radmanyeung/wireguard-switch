@@ -22,7 +22,9 @@ public static class WireguardConfigCatalog
 
     public static string GetTunnelName(string configPath)
     {
-        var fileName = Path.GetFileName(configPath);
+        var trimmedPath = configPath.TrimEnd('\\', '/');
+        var separatorIndex = trimmedPath.LastIndexOfAny(['\\', '/']);
+        var fileName = separatorIndex >= 0 ? trimmedPath[(separatorIndex + 1)..] : trimmedPath;
 
         if (fileName.EndsWith(".conf.dpapi", StringComparison.OrdinalIgnoreCase))
         {

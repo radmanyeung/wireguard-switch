@@ -7,6 +7,8 @@ namespace WireguardSplitTunnel.Core.Platform;
 [SupportedOSPlatform("macos")]
 public static class MacAdminShell
 {
+    private const string AdminPathPrefix = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
     public static async Task<MacShellResult> RunAsAdminAsync(
         string scriptBody,
         string promptReason,
@@ -21,7 +23,7 @@ public static class MacAdminShell
         // embedded backslashes/quotes escaped. We bounce through a temp file so
         // very long batches don't bump into the AppleScript literal-length cap.
         var tempScript = Path.Combine(Path.GetTempPath(), $"wgst-{Guid.NewGuid():N}.sh");
-        await File.WriteAllTextAsync(tempScript, "#!/bin/bash\nset -e\n" + scriptBody, Encoding.UTF8, cancellationToken);
+        await File.WriteAllTextAsync(tempScript, BuildScriptContent(scriptBody), Encoding.UTF8, cancellationToken);
 
         try
         {
@@ -73,6 +75,27 @@ public static class MacAdminShell
     private static string Escape(string value) => value
         .Replace("\\", "\\\\", StringComparison.Ordinal)
         .Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    internal static string BuildScriptContent(string scriptBody)
+    {
+        return $"#!{ResolvePreferredBashPath(File.Exists)}\n"
+            + "set -e\n"
+            + $"export PATH=\"{AdminPathPrefix}:$PATH\"\n"
+            + scriptBody;
+    }
+
+    internal static string ResolvePreferredBashPath(Func<string, bool> fileExists)
+    {
+        foreach (var candidate in new[] { "/opt/homebrew/bin/bash", "/usr/local/bin/bash", "/bin/bash" })
+        {
+            if (fileExists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return "/bin/bash";
+    }
 }
 
 public readonly record struct MacShellResult(int ExitCode, string StandardOutput, string StandardError)

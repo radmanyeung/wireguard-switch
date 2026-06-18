@@ -8,7 +8,10 @@ public sealed class MainWindowState : INotifyPropertyChanged
 {
     public ObservableCollection<DomainRuleRow> Domains { get; } = [];
 
+    public ObservableCollection<MonitorActivityRowView> MonitorActivities { get; } = [];
+
     public event PropertyChangedEventHandler? PropertyChanged;
+
     private void Raise([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
@@ -37,6 +40,16 @@ public sealed class DomainRuleRow : INotifyPropertyChanged
     public List<string> ResolvedIps { get; set; } = [];
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
     private void Raise([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
+
+public sealed record MonitorActivityRowView(
+    string ProcessName,
+    string DomainOrAddress,
+    string RemoteEndpoint,
+    string Route,
+    int Connections,
+    string ShortPath,
+    string LastSeen);

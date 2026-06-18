@@ -62,4 +62,46 @@ public sealed class Mode2RoutingEvaluatorTests
         compatibility.Status.Should().Be(RoutingStatus.Warning);
         compatibility.Profile.Should().Be(Mode2EffectiveProfile.DomainPriority);
     }
+
+    [Fact]
+    public void Evaluate_Mode2SoftwarePriorityWithWireGuardPresent_DefaultViaWireGuard_ReturnsPass()
+    {
+        var compatibility = Mode2RoutingEvaluator.Evaluate(
+            DomainRouteMode.BypassWireGuard,
+            enabledSoftwareRuleCount: 1,
+            wireGuardHalfDefaultsPresent: true,
+            bypassHalfDefaultsPresent: false,
+            defaultViaWireGuard: true);
+
+        compatibility.Status.Should().Be(RoutingStatus.Pass);
+        compatibility.Profile.Should().Be(Mode2EffectiveProfile.SoftwarePriority);
+    }
+
+    [Fact]
+    public void Evaluate_Mode2SoftwarePriorityWithWireGuardPresent_BypassMissing_ReturnsPass()
+    {
+        var compatibility = Mode2RoutingEvaluator.Evaluate(
+            DomainRouteMode.BypassWireGuard,
+            enabledSoftwareRuleCount: 2,
+            wireGuardHalfDefaultsPresent: true,
+            bypassHalfDefaultsPresent: false,
+            defaultViaWireGuard: false);
+
+        compatibility.Status.Should().Be(RoutingStatus.Pass);
+        compatibility.Profile.Should().Be(Mode2EffectiveProfile.SoftwarePriority);
+    }
+
+    [Fact]
+    public void Evaluate_Mode2DomainPriorityWithoutBypassHalfDefaults_ReturnsFail()
+    {
+        var compatibility = Mode2RoutingEvaluator.Evaluate(
+            DomainRouteMode.BypassWireGuard,
+            enabledSoftwareRuleCount: 0,
+            wireGuardHalfDefaultsPresent: true,
+            bypassHalfDefaultsPresent: false,
+            defaultViaWireGuard: true);
+
+        compatibility.Status.Should().Be(RoutingStatus.Fail);
+        compatibility.Profile.Should().Be(Mode2EffectiveProfile.DomainPriority);
+    }
 }
