@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
+  build-windows-release:
     runs-on: windows-latest
 
     steps:
@@ -67,4 +67,27 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ./wireguard-split-tunnel-win-x64.zip
+          generate_release_notes: true
+
+  build-mac-release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build macOS app package
+        run: |
+          chmod +x ./scripts/check-mac-deps.sh ./scripts/package-mac.sh
+          ./scripts/package-mac.sh
+
+      - name: Create GitHub Release and upload Mac asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./.build/mac-package/wireguard-split-tunnel-mac-arm64.zip
           generate_release_notes: true
