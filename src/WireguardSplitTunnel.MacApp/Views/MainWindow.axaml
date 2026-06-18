@@ -99,6 +99,102 @@
         </Grid>
       </TabItem>
 
+      <TabItem Header="Software Rules">
+        <Grid Margin="4,12,4,4" RowDefinitions="Auto,Auto,*,Auto">
+          <Border Grid.Row="0" Padding="12" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+            <StackPanel Spacing="10">
+              <TextBlock Text="Phase 1 stores per-app bundle rules and WireGuard profile assignments. True routing is blocked until a signed Apple Network Extension entitlement is available."
+                         TextWrapping="Wrap"
+                         Foreground="#92400E"/>
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                <TextBlock Text="Profile:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
+                <ComboBox Grid.Column="1" Name="MacProfileCombo" MinWidth="220">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:MacTunnelProfileRow">
+                      <TextBlock Text="{Binding DisplayName}"/>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Grid.Column="2" Content="Add WireGuard Profile" Click="OnAddMacProfileClick" MinWidth="160" Margin="8,0,0,0"/>
+                <Button Grid.Column="3" Content="Pick App Bundle" Click="OnPickMacAppBundleClick" MinWidth="140" Margin="8,0,0,0"/>
+              </Grid>
+            </StackPanel>
+          </Border>
+
+          <Grid Grid.Row="1" Margin="0,12,0,12" ColumnDefinitions="*,*">
+            <Border Grid.Column="0" Padding="10" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080" Margin="0,0,6,0">
+              <Grid RowDefinitions="Auto,*">
+                <TextBlock Text="WireGuard Profiles" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <ListBox Grid.Row="1" Name="MacProfileList" Background="Transparent" MinHeight="130">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:MacTunnelProfileRow">
+                      <Grid ColumnDefinitions="70,120,*,90,Auto" VerticalAlignment="Center" Margin="4">
+                        <CheckBox Grid.Column="0" IsChecked="{Binding Enabled, Mode=TwoWay}" Click="OnMacProfileEnabledChanged" Tag="{Binding Id}"/>
+                        <TextBlock Grid.Column="1" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Grid.Column="2" Text="{Binding ShortConfigPath}" Foreground="#666" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Grid.Column="3" Text="{Binding TunnelName}" Foreground="#666" TextTrimming="CharacterEllipsis"/>
+                        <Button Grid.Column="4" Content="Remove" Click="OnRemoveMacProfileClick" Tag="{Binding Id}" MinWidth="80"/>
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </Grid>
+            </Border>
+
+            <Border Grid.Column="1" Padding="10" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080" Margin="6,0,0,0">
+              <StackPanel Spacing="8">
+                <TextBlock Text="Apply Status" FontWeight="SemiBold"/>
+                <TextBlock Name="MacSoftwareApplyStatusText"
+                           Text="Not applied. Add profiles and app bundle rules first."
+                           TextWrapping="Wrap"
+                           Foreground="#92400E"/>
+                <Button Content="Apply Mac Software Rules" Click="OnApplyMacSoftwareRulesClick" MinWidth="190" HorizontalAlignment="Left"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Grid Grid.Row="2" RowDefinitions="Auto,*">
+            <Grid Grid.Row="0" ColumnDefinitions="70,160,*,150,220,Auto" Margin="2,0,2,4">
+              <TextBlock Grid.Column="0" Text="Enabled" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="1" Text="App" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="2" Text="Bundle ID" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="3" Text="Profile" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="4" Text="Bundle Path" FontWeight="SemiBold"/>
+              <TextBlock Grid.Column="5" Text="Action" FontWeight="SemiBold"/>
+            </Grid>
+            <Border Grid.Row="1" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
+              <ListBox Name="MacSoftwareRuleList" Background="Transparent">
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:MacSoftwareRuleRow">
+                    <Grid ColumnDefinitions="70,160,*,150,220,Auto" VerticalAlignment="Center" Margin="4">
+                      <CheckBox Grid.Column="0"
+                                IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                Click="OnMacSoftwareRuleEnabledChanged"
+                                Tag="{Binding}"/>
+                      <TextBlock Grid.Column="1" Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="2" Text="{Binding BundleIdentifier}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="3" Text="{Binding ProfileDisplayName}" TextTrimming="CharacterEllipsis"/>
+                      <TextBlock Grid.Column="4" Text="{Binding ShortBundlePath}" Foreground="#666" TextTrimming="CharacterEllipsis"/>
+                      <Button Grid.Column="5"
+                              Content="Remove"
+                              Click="OnRemoveMacSoftwareRuleClick"
+                              Tag="{Binding}"
+                              MinWidth="80"/>
+                    </Grid>
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </Border>
+          </Grid>
+
+          <TextBlock Grid.Row="3"
+                     Margin="0,10,0,0"
+                     Text="Bundle ID is the canonical app identity. The path is display/repair metadata only; WireGuard .conf private keys stay outside the package."
+                     TextWrapping="Wrap"
+                     Foreground="#666"/>
+        </Grid>
+      </TabItem>
+
       <TabItem Name="MonitorTabItem" Header="Monitor">
         <Grid Margin="4,12,4,4" RowDefinitions="Auto,Auto,*,Auto">
           <DockPanel Grid.Row="0">

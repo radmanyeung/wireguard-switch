@@ -27,6 +27,12 @@ public sealed class StateStoreTests
         state.ManagedRouteSnapshot.Should().BeEmpty();
         state.SoftwareRules.Should().NotBeNull();
         state.SoftwareRules.Should().BeEmpty();
+        state.MacTunnelProfiles.Should().NotBeNull();
+        state.MacTunnelProfiles.Should().BeEmpty();
+        state.MacSoftwareRules.Should().NotBeNull();
+        state.MacSoftwareRules.Should().BeEmpty();
+        state.MacDomainProfileAssignments.Should().NotBeNull();
+        state.MacDomainProfileAssignments.Should().BeEmpty();
         state.DomainGlobalDefaultMode.Should().Be(DomainRouteMode.BypassWireGuard);
         state.SoftwareGlobalDefaultMode.Should().Be(DomainRouteMode.BypassWireGuard);
     }
@@ -57,7 +63,18 @@ public sealed class StateStoreTests
                 new SoftwareRule("steam.exe", false, DomainRouteMode.BypassWireGuard, false)
             ],
             DomainRouteMode.UseWireGuard,
-            DomainRouteMode.BypassWireGuard);
+            DomainRouteMode.BypassWireGuard,
+            false,
+            new Dictionary<string, List<ResolvedIpDetail>>(),
+            [
+                new MacTunnelProfile("profile-us", "US", "/opt/homebrew/etc/wireguard/US.conf", true, "US")
+            ],
+            [
+                new MacSoftwareRule("com.openai.chat", "ChatGPT", "/Applications/ChatGPT.app", "profile-us", true)
+            ],
+            [
+                new MacDomainProfileAssignment("chatgpt.com", "profile-us", true)
+            ]);
 
         store.Save(original);
 
@@ -110,10 +127,16 @@ public sealed class StateStoreTests
         state.LastKnownResolvedIps.Should().NotBeNull();
         state.ManagedRouteSnapshot.Should().NotBeNull();
         state.SoftwareRules.Should().NotBeNull();
+        state.MacTunnelProfiles.Should().NotBeNull();
+        state.MacSoftwareRules.Should().NotBeNull();
+        state.MacDomainProfileAssignments.Should().NotBeNull();
         state.DomainRules.Should().BeEmpty();
         state.LastKnownResolvedIps.Should().BeEmpty();
         state.ManagedRouteSnapshot.Should().BeEmpty();
         state.SoftwareRules.Should().BeEmpty();
+        state.MacTunnelProfiles.Should().BeEmpty();
+        state.MacSoftwareRules.Should().BeEmpty();
+        state.MacDomainProfileAssignments.Should().BeEmpty();
 
         if (File.Exists(path))
         {

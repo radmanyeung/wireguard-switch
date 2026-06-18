@@ -87,6 +87,9 @@ public sealed class StateStore
             ManagedRouteSnapshot = state.ManagedRouteSnapshot ?? [],
             LastKnownResolvedIpDetails = state.LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(),
             SoftwareRules = state.SoftwareRules ?? [],
+            MacTunnelProfiles = state.MacTunnelProfiles ?? [],
+            MacSoftwareRules = state.MacSoftwareRules ?? [],
+            MacDomainProfileAssignments = state.MacDomainProfileAssignments ?? [],
             DomainGlobalDefaultMode = domainMode,
             SoftwareGlobalDefaultMode = softwareMode,
             RestoreNormalRoutingOnExit = state.RestoreNormalRoutingOnExit
@@ -94,5 +97,18 @@ public sealed class StateStore
     }
 
     private static AppState CreateDefaultState() =>
-        new([], new Dictionary<string, List<string>>(), [], null, false, [], DomainRouteMode.BypassWireGuard, DomainRouteMode.BypassWireGuard, false, new Dictionary<string, List<ResolvedIpDetail>>());
+        new(
+            [],
+            new Dictionary<string, List<string>>(),
+            [],
+            null,
+            false,
+            [],
+            DomainRouteMode.BypassWireGuard,
+            DomainRouteMode.BypassWireGuard,
+            false,
+            new Dictionary<string, List<ResolvedIpDetail>>(),
+            [],
+            [],
+            []);
 }

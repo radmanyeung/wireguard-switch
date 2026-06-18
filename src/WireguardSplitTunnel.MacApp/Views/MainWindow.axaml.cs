@@ -35,6 +35,9 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = viewState;
         DomainList.ItemsSource = viewState.Domains;
+        MacProfileCombo.ItemsSource = viewState.MacProfiles;
+        MacProfileList.ItemsSource = viewState.MacProfiles;
+        MacSoftwareRuleList.ItemsSource = viewState.MacSoftwareRules;
         MonitorActivityList.ItemsSource = viewState.MonitorActivities;
 
         var dataDirectory = GetDataDirectory();
@@ -278,6 +281,154 @@ public partial class MainWindow : Window
         Log("rolled back to last applied snapshot.");
     }
 
+    private async void OnAddMacProfileClick(object? sender, RoutedEventArgs e)
+    {
+        var initialFolder = await ResolveInitialFolderAsync();
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select WireGuard config for Mac software profile",
+            AllowMultiple = false,
+            SuggestedStartLocation = initialFolder,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("WireGuard config") { Patterns = ["*.conf"] },
+                new FilePickerFileType("All files") { Patterns = ["*"] }
+            ]
+        });
+
+        if (files.Count == 0)
+        {
+            return;
+        }
+
+        var profile = MacTunnelProfileService.CreateProfile(files[0].Path.LocalPath);
+        if (!MacSoftwareRuleMutations.TryAddProfile(appState, profile))
+        {
+            Log($"mac profile already exists or is invalid: {profile.DisplayName}");
+            return;
+        }
+
+        SaveState();
+        RefreshMacSoftwareRows(profile.Id);
+        Log($"added Mac profile: {profile.DisplayName}");
+    }
+
+    private async void OnPickMacAppBundleClick(object? sender, RoutedEventArgs e)
+    {
+        if (MacProfileCombo.SelectedItem is not MacTunnelProfileRow profile)
+        {
+            Log("add or select a Mac WireGuard profile first.");
+            return;
+        }
+
+        var initialFolder = await ResolveApplicationsFolderAsync();
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Select macOS .app bundle",
+            AllowMultiple = false,
+            SuggestedStartLocation = initialFolder
+        });
+
+        if (folders.Count == 0)
+        {
+            return;
+        }
+
+        var bundlePath = folders[0].Path.LocalPath;
+        var bundleInfo = MacAppBundleInfoParser.TryReadBundle(bundlePath);
+        if (bundleInfo is null)
+        {
+            Log($"unable to read CFBundleIdentifier from: {bundlePath}");
+            return;
+        }
+
+        if (!MacSoftwareRuleMutations.TryAddSoftwareRule(
+                appState,
+                bundleInfo.BundleIdentifier,
+                bundleInfo.DisplayName,
+                bundlePath,
+                profile.Id))
+        {
+            Log($"mac software rule already exists: {bundleInfo.DisplayName} -> {profile.DisplayName}");
+            return;
+        }
+
+        SaveState();
+        RefreshMacSoftwareRows(profile.Id);
+        Log($"added Mac software rule: {bundleInfo.DisplayName} -> {profile.DisplayName}");
+    }
+
+    private void OnMacProfileEnabledChanged(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox { Tag: string profileId } checkbox)
+        {
+            return;
+        }
+
+        if (MacSoftwareRuleMutations.TrySetProfileEnabled(appState, profileId, checkbox.IsChecked == true))
+        {
+            SaveState();
+            RefreshMacSoftwareRows(profileId);
+        }
+    }
+
+    private void OnRemoveMacProfileClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string profileId })
+        {
+            return;
+        }
+
+        if (MacSoftwareRuleMutations.RemoveProfile(appState, profileId))
+        {
+            SaveState();
+            RefreshMacSoftwareRows();
+            Log("removed Mac profile and its software rules.");
+        }
+    }
+
+    private void OnMacSoftwareRuleEnabledChanged(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox { Tag: MacSoftwareRuleRow row } checkbox)
+        {
+            return;
+        }
+
+        if (MacSoftwareRuleMutations.TrySetSoftwareRuleEnabled(
+                appState,
+                row.BundleIdentifier,
+                row.ProfileId,
+                checkbox.IsChecked == true))
+        {
+            SaveState();
+        }
+    }
+
+    private void OnRemoveMacSoftwareRuleClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: MacSoftwareRuleRow row })
+        {
+            return;
+        }
+
+        if (MacSoftwareRuleMutations.RemoveSoftwareRule(appState, row.BundleIdentifier, row.ProfileId))
+        {
+            SaveState();
+            RefreshMacSoftwareRows(row.ProfileId);
+            Log($"removed Mac software rule: {row.DisplayName} -> {row.ProfileDisplayName}");
+        }
+    }
+
+    private void OnApplyMacSoftwareRulesClick(object? sender, RoutedEventArgs e)
+    {
+        var enabledProfiles = appState.MacTunnelProfiles.Count(profile => profile.Enabled);
+        var enabledRules = appState.MacSoftwareRules.Count(rule => rule.Enabled);
+        var capability = MacSoftwareRuleApplyGuard.CheckCapability();
+        var status = $"{capability.Message} Profiles: {enabledProfiles}; enabled app rules: {enabledRules}.";
+        MacSoftwareApplyStatusText.Text = status;
+        Log($"mac software rules apply blocked: {status}");
+    }
+
     private async void OnStartMonitorClick(object? sender, RoutedEventArgs e)
     {
         await StartNetworkMonitorAsync();
@@ -461,6 +612,7 @@ public partial class MainWindow : Window
         selectedConfigPath = appState.SelectedTunnelConfigPath;
         ConfigPathText.Text = string.IsNullOrWhiteSpace(selectedConfigPath) ? "(none)" : selectedConfigPath;
         RefreshDomainRows();
+        RefreshMacSoftwareRows();
     }
 
     private void RefreshDomainRows()
@@ -490,6 +642,71 @@ public partial class MainWindow : Window
         }
 
         SaveState();
+    }
+
+    private void RefreshMacSoftwareRows(string? preferredProfileId = null)
+    {
+        var selectedProfileId = preferredProfileId
+            ?? (MacProfileCombo.SelectedItem as MacTunnelProfileRow)?.Id;
+
+        viewState.MacProfiles.Clear();
+        foreach (var profile in appState.MacTunnelProfiles
+                     .OrderBy(profile => profile.DisplayName, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(profile => profile.ConfigPath, StringComparer.OrdinalIgnoreCase))
+        {
+            viewState.MacProfiles.Add(new MacTunnelProfileRow(
+                profile.Id,
+                profile.DisplayName,
+                profile.ConfigPath,
+                profile.TunnelName,
+                profile.Enabled));
+        }
+
+        MacProfileCombo.SelectedItem = viewState.MacProfiles.FirstOrDefault(profile =>
+                                           string.Equals(profile.Id, selectedProfileId, StringComparison.OrdinalIgnoreCase))
+                                       ?? viewState.MacProfiles.FirstOrDefault();
+
+        var profileNames = appState.MacTunnelProfiles.ToDictionary(
+            profile => profile.Id,
+            profile => profile.DisplayName,
+            StringComparer.OrdinalIgnoreCase);
+
+        viewState.MacSoftwareRules.Clear();
+        foreach (var rule in appState.MacSoftwareRules
+                     .OrderBy(rule => rule.DisplayName, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(rule => rule.BundleIdentifier, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(rule => rule.ProfileId, StringComparer.OrdinalIgnoreCase))
+        {
+            viewState.MacSoftwareRules.Add(new MacSoftwareRuleRow(
+                rule.BundleIdentifier,
+                rule.DisplayName,
+                rule.BundlePath,
+                rule.ProfileId,
+                profileNames.TryGetValue(rule.ProfileId, out var profileName) ? profileName : "(missing profile)",
+                rule.Enabled));
+        }
+    }
+
+    private async Task<IStorageFolder?> ResolveApplicationsFolderAsync()
+    {
+        foreach (var path in new[] { "/Applications", "/System/Applications" })
+        {
+            if (!Directory.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                return await StorageProvider.TryGetFolderFromPathAsync(new Uri(path));
+            }
+            catch
+            {
+                // Best-effort only.
+            }
+        }
+
+        return null;
     }
 
     private void SaveState()

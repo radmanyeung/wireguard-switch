@@ -60,6 +60,18 @@ Using The App
 6. In Domain Rules, add presets and click Apply Routes.
 7. In Monitor, check VPN/Normal speed, latency, and route classification.
 
+Mac Software Rules
+------------------
+
+This build includes Phase 1 Mac Software Rules:
+
+1. Add one or more WireGuard profiles from /opt/homebrew/etc/wireguard/*.conf.
+2. Pick a macOS .app bundle, such as ChatGPT.app, Claude.app, or Google Chrome.app.
+3. Assign the app bundle identifier to a WireGuard profile.
+4. Save and reopen the app to confirm the rules persist.
+
+Important: true per-app routing on macOS requires a signed Apple Network Extension entitlement. Without an Apple Developer Network Extension build, Apply Mac Software Rules will show a clear blocked status and will not modify routes, pf rules, or system firewall state.
+
 Notes
 -----
 
