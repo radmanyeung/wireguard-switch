@@ -29,11 +29,13 @@ public partial class MainWindow : Window
     private CancellationTokenSource? monitorRefreshCts;
     private int monitorRefreshInProgress;
     private int monitorRunGeneration;
+    private bool suppressConfigSelectionChanged;
 
     public MainWindow()
     {
         InitializeComponent();
         DataContext = viewState;
+        ConfigCombo.ItemsSource = viewState.TunnelConfigs;
         DomainList.ItemsSource = viewState.Domains;
         MacProfileCombo.ItemsSource = viewState.MacProfiles;
         MacProfileList.ItemsSource = viewState.MacProfiles;
@@ -83,8 +85,79 @@ public partial class MainWindow : Window
         selectedConfigPath = files[0].Path.LocalPath;
         appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
         SaveState();
-        ConfigPathText.Text = selectedConfigPath;
+        RefreshTunnelConfigRows(selectedConfigPath);
+        if (!IsDiscoveredConfigPath(selectedConfigPath))
+        {
+            Log("For reliable startup, copy this config to /opt/homebrew/etc/wireguard and select it there.");
+        }
+
         Log($"selected config: {selectedConfigPath}");
+    }
+
+    private void OnRefreshConfigsClick(object? sender, RoutedEventArgs e)
+    {
+        RefreshTunnelConfigRows(selectedConfigPath);
+        Log("config list refreshed.");
+    }
+
+    private void OnConfigSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (suppressConfigSelectionChanged)
+        {
+            return;
+        }
+
+        if (ConfigCombo.SelectedItem is not TunnelConfigRow row)
+        {
+            return;
+        }
+
+        selectedConfigPath = row.Path;
+        appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
+        SaveState();
+        Log($"selected config: {selectedConfigPath}");
+    }
+
+    private async void OnStartAiVpnClick(object? sender, RoutedEventArgs e)
+    {
+        var discoveredConfigs = WireguardConfigCatalog.DiscoverConfigPaths();
+        var currentSelection = (ConfigCombo.SelectedItem as TunnelConfigRow)?.Path
+                               ?? selectedConfigPath
+                               ?? appState.SelectedTunnelConfigPath;
+        var selection = MacQuickStartService.SelectConfig(currentSelection, discoveredConfigs);
+        RefreshTunnelConfigRows(selection.SelectedConfigPath ?? currentSelection);
+
+        if (selection.Status != MacQuickStartStatus.Success || string.IsNullOrWhiteSpace(selection.SelectedConfigPath))
+        {
+            MainTabs.SelectedIndex = 0;
+            Log(selection.Message);
+            return;
+        }
+
+        selectedConfigPath = selection.SelectedConfigPath;
+        appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
+        SaveState();
+        RefreshTunnelConfigRows(selectedConfigPath);
+
+        StartAiVpnButton.IsEnabled = false;
+        try
+        {
+            await RunGuardedAsync("start AI VPN", async ct =>
+            {
+                Log(selection.Message);
+                await tunnelControl.InstallAndStartAsync(selectedConfigPath!, ct);
+                var iface = await WaitForWireGuardInterfaceAsync(ct);
+                RefreshTunnelStatus();
+                EnsureAiServicesPreset();
+                await ApplyDomainRoutesAsync(iface, ct);
+                await StartNetworkMonitorAsync();
+                MainTabs.SelectedItem = MonitorTabItem;
+            });
+        }
+        finally
+        {
+            StartAiVpnButton.IsEnabled = true;
+        }
     }
 
     private async Task<IStorageFolder?> ResolveInitialFolderAsync()
@@ -224,21 +297,7 @@ public partial class MainWindow : Window
 
         await RunGuardedAsync("apply routes", async ct =>
         {
-            SyncDomainRowsToState();
-            var enabledRules = appState.DomainRules
-                .Where(rule => rule.Enabled && rule.Mode == DomainRouteMode.UseWireGuard)
-                .ToList();
-            var coordinator = new RuleResolutionCoordinator(resolver);
-            var resolvedRules = await coordinator.ResolveEnabledRulesAsync(enabledRules, ct);
-            var plan = DomainRouteApplyPlanner.Build(appState.ManagedRouteSnapshot, resolvedRules);
-
-            await routeService.ApplyAsync(iface, plan.ToAdd, plan.ToRemove, ct);
-            ResolutionStateUpdater.Apply(appState, resolvedRules);
-            appState = appState with { ManagedRouteSnapshot = plan.Snapshot.ToList() };
-            SaveState();
-            appliedStateStore.Save(RuleStateMutations.Clone(appState));
-            RefreshDomainRows();
-            Log($"applied {plan.ToAdd.Count} route(s) on {iface}; removed {plan.ToRemove.Count}; resolved {resolvedRules.Count} rule(s).");
+            await ApplyDomainRoutesAsync(iface, ct);
         });
     }
 
@@ -610,10 +669,102 @@ public partial class MainWindow : Window
     private void LoadStateToUi()
     {
         selectedConfigPath = appState.SelectedTunnelConfigPath;
-        ConfigPathText.Text = string.IsNullOrWhiteSpace(selectedConfigPath) ? "(none)" : selectedConfigPath;
+        RefreshTunnelConfigRows(selectedConfigPath);
         RefreshDomainRows();
         RefreshMacSoftwareRows();
     }
+
+    private void RefreshTunnelConfigRows(string? preferredPath = null)
+    {
+        var discovered = WireguardConfigCatalog.DiscoverConfigPaths();
+        if (!string.IsNullOrWhiteSpace(selectedConfigPath)
+            && File.Exists(selectedConfigPath)
+            && !discovered.Contains(selectedConfigPath, StringComparer.OrdinalIgnoreCase))
+        {
+            discovered.Add(selectedConfigPath);
+        }
+
+        var rows = discovered
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => new TunnelConfigRow(path, WireguardConfigCatalog.GetTunnelName(path)))
+            .OrderBy(row => row.Display, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        suppressConfigSelectionChanged = true;
+        try
+        {
+            viewState.TunnelConfigs.Clear();
+            foreach (var row in rows)
+            {
+                viewState.TunnelConfigs.Add(row);
+            }
+
+            var preferred = preferredPath ?? selectedConfigPath ?? appState.SelectedTunnelConfigPath;
+            ConfigCombo.SelectedItem = viewState.TunnelConfigs.FirstOrDefault(row =>
+                !string.IsNullOrWhiteSpace(preferred)
+                && string.Equals(row.Path, preferred, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            suppressConfigSelectionChanged = false;
+        }
+    }
+
+    private async Task<string> WaitForWireGuardInterfaceAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 12; attempt++)
+        {
+            if (detector.TryGetActiveInterface(out var iface))
+            {
+                activeTunnelName = iface;
+                return iface;
+            }
+
+            await Task.Delay(500, cancellationToken);
+        }
+
+        throw new InvalidOperationException(
+            "Tunnel started, but no WireGuard interface was detected. Check the selected config and try Refresh Status.");
+    }
+
+    private void EnsureAiServicesPreset()
+    {
+        var result = DomainPresetService.ApplyPreset(appState, DomainPreset.AiServicesBundle);
+        if (result.Added > 0)
+        {
+            SaveState();
+            RefreshDomainRows();
+            Log($"AI Services Bundle added {result.Added} domain rule(s).");
+        }
+        else
+        {
+            Log("AI Services Bundle already selected.");
+        }
+    }
+
+    private async Task ApplyDomainRoutesAsync(string iface, CancellationToken ct)
+    {
+        SyncDomainRowsToState();
+        var enabledRules = appState.DomainRules
+            .Where(rule => rule.Enabled && rule.Mode == DomainRouteMode.UseWireGuard)
+            .ToList();
+        var coordinator = new RuleResolutionCoordinator(resolver);
+        var resolvedRules = await coordinator.ResolveEnabledRulesAsync(enabledRules, ct);
+        var plan = DomainRouteApplyPlanner.Build(appState.ManagedRouteSnapshot, resolvedRules);
+
+        await routeService.ApplyAsync(iface, plan.ToAdd, plan.ToRemove, ct);
+        ResolutionStateUpdater.Apply(appState, resolvedRules);
+        appState = appState with { ManagedRouteSnapshot = plan.Snapshot.ToList() };
+        SaveState();
+        appliedStateStore.Save(RuleStateMutations.Clone(appState));
+        RefreshDomainRows();
+        Log($"applied {plan.ToAdd.Count} route(s) on {iface}; removed {plan.ToRemove.Count}; resolved {resolvedRules.Count} rule(s).");
+    }
+
+    private static bool IsDiscoveredConfigPath(string path) =>
+        WireguardConfigCatalog.DiscoverConfigPaths()
+            .Contains(path, StringComparer.OrdinalIgnoreCase);
 
     private void RefreshDomainRows()
     {
@@ -741,9 +892,30 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Log($"{label}: FAILED - {ex.Message}");
+            Log($"{label}: FAILED - {ToFriendlyMacError(ex.Message)}");
             Debug.WriteLine(ex);
         }
+    }
+
+    private static string ToFriendlyMacError(string message)
+    {
+        if (message.Contains("/opt/homebrew/bin/bash: No such file or directory", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Homebrew Bash is missing. Run: brew install bash";
+        }
+
+        if (message.Contains("wg-quick not found", StringComparison.OrdinalIgnoreCase))
+        {
+            return "WireGuard tools are missing. Run: brew install wireguard-tools bash";
+        }
+
+        if (message.Contains("Operation not permitted", StringComparison.OrdinalIgnoreCase)
+            && message.Contains(".conf", StringComparison.OrdinalIgnoreCase))
+        {
+            return "macOS blocked that config path. Copy the .conf file to /opt/homebrew/etc/wireguard, refresh configs, and choose it there.";
+        }
+
+        return message;
     }
 
     private void Log(string message)

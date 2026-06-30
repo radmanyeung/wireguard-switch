@@ -951,14 +951,14 @@ public sealed class SystemNetworkMonitorService : INetworkMonitorService
         {
             if (OperatingSystem.IsMacOS())
             {
-                var macResult = await RunProcessCaptureAsync("lsof", "-nP -iTCP -sTCP:ESTABLISHED", cancellationToken);
-                if (macResult.ExitCode != 0)
+                var macResult = await RunProcessCaptureAsync(ResolveMacLsofPath(), "-nP -iTCP -sTCP:ESTABLISHED", cancellationToken);
+                var parsed = MacLsofResultParser.Parse(macResult.ExitCode, macResult.Stdout, macResult.Stderr);
+                if (!string.IsNullOrWhiteSpace(parsed.Warning))
                 {
-                    warnings.Add($"lsof failed: {macResult.Stderr}");
-                    return [];
+                    warnings.Add(parsed.Warning);
                 }
 
-                return MacLsofTcpConnectionParser.Parse(macResult.Stdout);
+                return parsed.Connections;
             }
 
             var result = await RunProcessCaptureAsync("netstat", "-ano", cancellationToken);
@@ -976,6 +976,9 @@ public sealed class SystemNetworkMonitorService : INetworkMonitorService
             return [];
         }
     }
+
+    private static string ResolveMacLsofPath() =>
+        File.Exists("/usr/sbin/lsof") ? "/usr/sbin/lsof" : "lsof";
 
     private static NetworkProcessIdentity ResolveProcessIdentity(int processId)
     {

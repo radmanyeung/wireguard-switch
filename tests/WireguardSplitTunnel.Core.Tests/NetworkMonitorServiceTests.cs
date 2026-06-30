@@ -137,6 +137,23 @@ public sealed class NetworkMonitorServiceTests
     }
 
     [Fact]
+    public void MacLsofResultParser_UsesStdoutEvenWhenLsofReturnsWarningExitCode()
+    {
+        const string output = """
+        COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
+        Codex   672 user 31u IPv4 0xaa 0t0 TCP 10.5.0.2:49462->104.18.32.47:443 (ESTABLISHED)
+        """;
+
+        var result = MacLsofResultParser.Parse(1, output, "lsof: warning: not all processes could be inspected");
+
+        result.Connections.Should().ContainSingle(connection =>
+            connection.ProcessId == 672
+            && connection.RemoteAddress.ToString() == "104.18.32.47"
+            && connection.RemotePort == 443);
+        result.Warning.Should().BeNull();
+    }
+
+    [Fact]
     public void DomainMatcher_UsesManagedRouteBeforeResolvedIp_ThenFallsBackToIp()
     {
         var state = new AppState(

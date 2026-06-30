@@ -33,6 +33,16 @@ public sealed class ReleaseVersionMetadataTests
         script.Should().NotContain("<string>0.1.0</string>");
     }
 
+    [Fact]
+    public void MacPackageScript_IncludesDoubleClickLauncher()
+    {
+        var script = ReadRepositoryFile("scripts/package-mac.sh");
+
+        script.Should().Contain("Start WireGuard Split Tunnel.command");
+        script.Should().Contain("xattr -dr com.apple.quarantine");
+        script.Should().Contain("WireguardSplitTunnel.app/Contents/MacOS/WireguardSplitTunnel");
+    }
+
     private static string ReadCentralVersion()
     {
         var document = XDocument.Parse(ReadRepositoryFile("Directory.Build.props"));

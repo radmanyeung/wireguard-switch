@@ -2,6 +2,9 @@
 
 Windows GUI tool to manage split tunnel for domain rules + software rules with WireGuard.
 
+An Apple Silicon macOS release is also available for tunnel control, domain
+routes, and network monitoring.
+
 ## One-click install (new PC)
 1. Copy this whole folder to the target Windows PC.
 2. Double-click `install.cmd`.
@@ -34,6 +37,75 @@ Installer bootstrap does:
 - After install finishes, run `start.cmd`.
 - The Release ZIP includes the published app, helper scripts, and installer/startup wrappers.
 - Installer will automatically try to remove the Windows download block (`Unblock-File`) from the extracted release files.
+
+## macOS Apple Silicon release
+
+Download `wireguard-split-tunnel-mac-arm64.zip` from GitHub Releases and extract
+it first. The package is for Apple Silicon Macs and is self-contained, so the
+.NET SDK is not required.
+
+The release does not include a WireGuard `.conf` file. Configurations normally
+contain private keys, so download or export a real configuration from your VPN
+provider or WireGuard server and keep it private.
+
+Install the required command-line tools, create the configuration directory,
+and copy your configuration into it:
+
+```bash
+brew install wireguard-tools bash
+sudo mkdir -p /opt/homebrew/etc/wireguard
+sudo cp "/path/to/your-vpn.conf" /opt/homebrew/etc/wireguard/
+sudo chmod 600 /opt/homebrew/etc/wireguard/*.conf
+```
+
+Replace `/path/to/your-vpn.conf` with the real path to your configuration. Then
+check the dependencies from the extracted release folder:
+
+```bash
+cd "$HOME/Downloads/wireguard-split-tunnel-mac-arm64"
+./check-mac-deps.sh
+```
+
+When the check reports that all dependencies are available, open the app:
+
+```bash
+open "Start WireGuard Split Tunnel.command"
+```
+
+You can also double-click `Start WireGuard Split Tunnel.command` in Finder. The
+launcher removes the macOS quarantine flag when possible, opens
+`WireguardSplitTunnel.app`, and falls back to the direct executable if Finder
+cannot open the app.
+
+On first launch, macOS may block this private, non-notarized build. Right-click
+`WireguardSplitTunnel.app`, choose **Open**, and confirm **Open** again. If the
+app is still quarantined, run:
+
+```bash
+xattr -dr com.apple.quarantine WireguardSplitTunnel.app
+open WireguardSplitTunnel.app
+```
+
+If Finder still says the application cannot be opened, launch its executable
+directly from Terminal:
+
+```bash
+"$HOME/Downloads/wireguard-split-tunnel-mac-arm64/WireguardSplitTunnel.app/Contents/MacOS/WireguardSplitTunnel"
+```
+
+Inside the app, the easiest path is now:
+
+1. Choose a config from `/opt/homebrew/etc/wireguard`.
+2. Click **Start AI VPN**.
+3. Approve the macOS administrator prompt.
+
+The button starts the tunnel, adds the AI Services Bundle routes, applies the
+routes, and starts the Monitor tab.
+
+If the app opens but the tunnel will not enable, this is a tunnel-setup issue,
+not an app-launch issue. Run `./check-mac-deps.sh` again, confirm that a real
+`.conf` file exists in `/opt/homebrew/etc/wireguard`, and verify its permissions
+with `ls -l /opt/homebrew/etc/wireguard/*.conf`.
 
 ## Optional installer switches
 - `install.cmd -NoPostInstallSelfTest`

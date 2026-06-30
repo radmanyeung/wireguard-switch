@@ -29,10 +29,29 @@
         <Grid Margin="4,12,4,4" RowDefinitions="Auto,Auto,*">
           <Border Grid.Row="0" Padding="12" CornerRadius="8" BorderThickness="1" BorderBrush="#33808080">
             <StackPanel Spacing="10">
-              <Grid ColumnDefinitions="Auto,*,Auto">
+              <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto">
                 <TextBlock Text="Config:" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
-                <TextBlock Grid.Column="1" Name="ConfigPathText" Text="(none)" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                <Button Grid.Column="2" Name="PickConfigButton" Content="Pick..." Click="OnPickConfigClick" MinWidth="90"/>
+                <ComboBox Grid.Column="1" Name="ConfigCombo" SelectionChanged="OnConfigSelectionChanged" MinWidth="320">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TunnelConfigRow">
+                      <StackPanel>
+                        <TextBlock Text="{Binding Display}" FontWeight="SemiBold"/>
+                        <TextBlock Text="{Binding ShortPath}" Foreground="#888" FontSize="11" TextTrimming="CharacterEllipsis"/>
+                      </StackPanel>
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Grid.Column="2" Name="RefreshConfigsButton" Content="Refresh" Click="OnRefreshConfigsClick" MinWidth="90" Margin="8,0,0,0"/>
+                <Button Grid.Column="3" Name="PickConfigButton" Content="Pick..." Click="OnPickConfigClick" MinWidth="90" Margin="8,0,0,0"/>
+                <Button Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4"
+                        Name="StartAiVpnButton"
+                        Content="Start AI VPN"
+                        Click="OnStartAiVpnClick"
+                        MinWidth="170"
+                        Margin="0,10,0,0"
+                        HorizontalAlignment="Left"
+                        Background="#0F766E"
+                        Foreground="White"/>
               </Grid>
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Name="EnableTunnelButton" Content="Enable Tunnel" Click="OnEnableTunnelClick" MinWidth="130"/>

@@ -79,6 +79,33 @@ public static class MacLsofTcpConnectionParser
     }
 }
 
+public sealed record MacLsofParseResult(
+    IReadOnlyList<NetworkConnection> Connections,
+    string? Warning);
+
+public static class MacLsofResultParser
+{
+    public static MacLsofParseResult Parse(int exitCode, string stdout, string stderr)
+    {
+        var connections = MacLsofTcpConnectionParser.Parse(stdout);
+        if (connections.Count > 0)
+        {
+            return new MacLsofParseResult(connections, null);
+        }
+
+        if (exitCode == 0)
+        {
+            return new MacLsofParseResult(connections, null);
+        }
+
+        var warning = string.IsNullOrWhiteSpace(stderr)
+            ? "lsof could not read active connections."
+            : $"lsof could not read active connections: {stderr.Trim()}";
+
+        return new MacLsofParseResult(connections, warning);
+    }
+}
+
 public static class MacRouteGetParser
 {
     public static string? ParseInterface(string output)

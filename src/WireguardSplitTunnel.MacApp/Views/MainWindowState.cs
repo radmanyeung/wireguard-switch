@@ -6,6 +6,8 @@ namespace WireguardSplitTunnel.MacApp.Views;
 
 public sealed class MainWindowState : INotifyPropertyChanged
 {
+    public ObservableCollection<TunnelConfigRow> TunnelConfigs { get; } = [];
+
     public ObservableCollection<DomainRuleRow> Domains { get; } = [];
 
     public ObservableCollection<MacTunnelProfileRow> MacProfiles { get; } = [];
@@ -18,6 +20,22 @@ public sealed class MainWindowState : INotifyPropertyChanged
 
     private void Raise([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
+public sealed record TunnelConfigRow(string Path, string Display)
+{
+    public string ShortPath => ShortenPath(Path);
+
+    public override string ToString() => Display;
+
+    private static string ShortenPath(string path)
+    {
+        var directory = System.IO.Path.GetDirectoryName(path);
+        var fileName = System.IO.Path.GetFileName(path);
+        return string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(fileName)
+            ? path
+            : $"{directory}/.../{fileName}";
+    }
 }
 
 public sealed class DomainRuleRow : INotifyPropertyChanged

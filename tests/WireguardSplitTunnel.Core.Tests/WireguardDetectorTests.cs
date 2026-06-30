@@ -5,6 +5,31 @@ namespace WireguardSplitTunnel.Core.Tests;
 
 public sealed class WireguardDetectorTests
 {
+    [Fact]
+    public void ChoosePreferredMacFallbackInterface_PrefersIpv4UtunOverIpv6OnlyUtun()
+    {
+        var selected = SystemWireguardDetector.ChoosePreferredMacFallbackInterface(
+            [
+                new MacWireguardInterfaceCandidate("utun0", IsUp: true, HasIpv4: false),
+                new MacWireguardInterfaceCandidate("utun1", IsUp: true, HasIpv4: false),
+                new MacWireguardInterfaceCandidate("utun4", IsUp: true, HasIpv4: true)
+            ]);
+
+        selected.Should().Be("utun4");
+    }
+
+    [Fact]
+    public void ChoosePreferredMacFallbackInterface_IgnoresDownInterfaces()
+    {
+        var selected = SystemWireguardDetector.ChoosePreferredMacFallbackInterface(
+            [
+                new MacWireguardInterfaceCandidate("utun2", IsUp: false, HasIpv4: true),
+                new MacWireguardInterfaceCandidate("utun3", IsUp: true, HasIpv4: false)
+            ]);
+
+        selected.Should().Be("utun3");
+    }
+
     [Theory]
     [InlineData("/var/run/wireguard/utun4.sock", "utun4")]
     [InlineData("/private/var/run/wireguard/utun12.sock", "utun12")]

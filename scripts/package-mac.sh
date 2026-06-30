@@ -101,6 +101,31 @@ chmod +x "$release_dir/check-mac-deps.sh"
 cp "$readme" "$release_dir/README-Mac.txt"
 cp -R "$app_dir" "$release_dir/WireguardSplitTunnel.app"
 
+launcher="$release_dir/Start WireGuard Split Tunnel.command"
+cat > "$launcher" <<'LAUNCHER'
+#!/bin/zsh
+set -u
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+app="$script_dir/WireguardSplitTunnel.app"
+exe="$app/Contents/MacOS/WireguardSplitTunnel"
+
+if [ ! -d "$app" ]; then
+  echo "WireguardSplitTunnel.app was not found next to this launcher."
+  echo "Keep this launcher in the extracted release folder."
+  read -r "unused?Press Return to close..."
+  exit 1
+fi
+
+/usr/bin/xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
+
+if ! /usr/bin/open "$app"; then
+  echo "Finder could not open the app. Starting the executable directly..."
+  "$exe"
+fi
+LAUNCHER
+chmod +x "$launcher"
+
 if command -v codesign >/dev/null 2>&1; then
   echo "Applying ad-hoc codesign..."
   codesign --force --deep --sign - "$release_dir/WireguardSplitTunnel.app" || {
@@ -115,4 +140,3 @@ echo ""
 echo "Package complete:"
 echo "  App: $release_dir/WireguardSplitTunnel.app"
 echo "  Zip: $zip_path"
-

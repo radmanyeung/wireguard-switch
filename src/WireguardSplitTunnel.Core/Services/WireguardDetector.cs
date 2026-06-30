@@ -4,6 +4,8 @@ using WireguardSplitTunnel.Core.Platform;
 
 namespace WireguardSplitTunnel.Core.Services;
 
+internal sealed record MacWireguardInterfaceCandidate(string Name, bool IsUp, bool HasIpv4);
+
 public interface IWireguardDetector
 {
     bool TryGetActiveInterface(out string interfaceName);
@@ -76,22 +78,33 @@ public sealed class SystemWireguardDetector : IWireguardDetector
             }
         }
 
-        // Fallback: pick the first up "utun" interface that has a peer-style point-to-point IPv4
-        // address. This is best-effort — the .name file path above is authoritative for wg-quick.
-        var fallback = NetworkInterface
-            .GetAllNetworkInterfaces()
-            .FirstOrDefault(nic =>
-                nic.OperationalStatus == OperationalStatus.Up
-                && nic.Name.StartsWith("utun", StringComparison.OrdinalIgnoreCase));
+        // Fallback: pick an up "utun" interface with IPv4 first. macOS often has
+        // system utun0/utun1 interfaces that are IPv6-only and are not WireGuard.
+        var fallback = ChoosePreferredMacFallbackInterface(
+            NetworkInterface.GetAllNetworkInterfaces()
+                .Where(nic => nic.Name.StartsWith("utun", StringComparison.OrdinalIgnoreCase))
+                .Select(ToMacCandidate));
 
-        if (fallback is not null)
+        if (!string.IsNullOrWhiteSpace(fallback))
         {
-            interfaceName = fallback.Name;
+            interfaceName = fallback;
             return true;
         }
 
         interfaceName = string.Empty;
         return false;
+    }
+
+    internal static string? ChoosePreferredMacFallbackInterface(IEnumerable<MacWireguardInterfaceCandidate> candidates)
+    {
+        return candidates
+            .Where(candidate => candidate.IsUp)
+            .Where(candidate => candidate.Name.StartsWith("utun", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(candidate => candidate.HasIpv4)
+            .ThenBy(candidate => ParseUtunIndex(candidate.Name))
+            .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate => candidate.Name)
+            .FirstOrDefault();
     }
 
     internal static bool TryParseMacWireGuardSocketInterface(string socketPath, out string interfaceName)
@@ -129,5 +142,34 @@ public sealed class SystemWireguardDetector : IWireguardDetector
         {
             return false;
         }
+    }
+
+    private static MacWireguardInterfaceCandidate ToMacCandidate(NetworkInterface nic)
+    {
+        var hasIpv4 = false;
+        try
+        {
+            hasIpv4 = nic.GetIPProperties().UnicastAddresses.Any(address =>
+                address.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
+        }
+        catch
+        {
+            hasIpv4 = false;
+        }
+
+        return new MacWireguardInterfaceCandidate(
+            nic.Name,
+            nic.OperationalStatus == OperationalStatus.Up,
+            hasIpv4);
+    }
+
+    private static int ParseUtunIndex(string name)
+    {
+        if (name.Length <= 4 || !name.StartsWith("utun", StringComparison.OrdinalIgnoreCase))
+        {
+            return int.MaxValue;
+        }
+
+        return int.TryParse(name[4..], out var index) ? index : int.MaxValue;
     }
 }
