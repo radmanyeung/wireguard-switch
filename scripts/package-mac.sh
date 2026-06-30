@@ -46,6 +46,12 @@ if [ ! -f "$readme" ]; then
   exit 1
 fi
 
+app_version="$(dotnet msbuild "$project" -getProperty:Version | tail -n 1 | tr -d '\r')"
+if [ -z "$app_version" ]; then
+  echo "Unable to resolve app version from project metadata."
+  exit 1
+fi
+
 rm -rf "$build_root"
 mkdir -p "$publish_dir" "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources" "$release_dir"
 
@@ -61,7 +67,7 @@ dotnet publish "$project" \
 cp -R "$publish_dir"/. "$app_dir/Contents/MacOS/"
 chmod +x "$app_dir/Contents/MacOS/WireguardSplitTunnel"
 
-cat > "$app_dir/Contents/Info.plist" <<'PLIST'
+cat > "$app_dir/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -79,9 +85,9 @@ cat > "$app_dir/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$app_version</string>
   <key>CFBundleVersion</key>
-  <string>0.1.0</string>
+  <string>$app_version</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>
@@ -109,3 +115,4 @@ echo ""
 echo "Package complete:"
 echo "  App: $release_dir/WireguardSplitTunnel.app"
 echo "  Zip: $zip_path"
+

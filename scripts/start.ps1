@@ -45,6 +45,76 @@ function Unblock-AppFile {
     }
 }
 
+function Get-ExpectedAppVersion {
+    param([string]$RepoRoot)
+
+    $propsPath = Join-Path $RepoRoot 'Directory.Build.props'
+    if (-not (Test-Path $propsPath)) {
+        return $null
+    }
+
+    try {
+        $content = Get-Content -LiteralPath $propsPath -Raw
+        $match = [regex]::Match($content, '<VersionPrefix>\s*([^<]+?)\s*</VersionPrefix>')
+        if ($match.Success) {
+            return $match.Groups[1].Value.Trim().TrimStart('v')
+        }
+    }
+    catch {
+        Write-LauncherLog "Unable to read expected app version: $($_.Exception.Message)"
+    }
+
+    return $null
+}
+
+function Normalize-VersionText {
+    param([string]$VersionText)
+
+    if ([string]::IsNullOrWhiteSpace($VersionText)) {
+        return $null
+    }
+
+    $value = $VersionText.Trim().TrimStart('v')
+    $metadataIndex = $value.IndexOf('+')
+    if ($metadataIndex -ge 0) {
+        $value = $value.Substring(0, $metadataIndex)
+    }
+
+    if ($value -match '^(\d+)\.(\d+)\.(\d+)\.0$') {
+        return "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+    }
+
+    return $value
+}
+
+function Get-AppFileVersionInfo {
+    param([System.IO.FileInfo]$File)
+
+    $versionText = $null
+    $versionKey = [version]'0.0.0.0'
+    try {
+        $fileVersionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($File.FullName)
+        $versionText = Normalize-VersionText $fileVersionInfo.ProductVersion
+        if ([string]::IsNullOrWhiteSpace($versionText)) {
+            $versionText = Normalize-VersionText $fileVersionInfo.FileVersion
+        }
+        if (-not [string]::IsNullOrWhiteSpace($versionText)) {
+            [version]$parsed = $versionText
+            $versionKey = $parsed
+        }
+    }
+    catch {
+        Write-LauncherLog "Unable to read app version for $($File.FullName): $($_.Exception.Message)"
+    }
+
+    [pscustomobject]@{
+        FullName = $File.FullName
+        LastWriteTime = $File.LastWriteTime
+        VersionText = $versionText
+        VersionKey = $versionKey
+    }
+}
+
 try {
     $repoRoot = Split-Path -Parent $PSScriptRoot
     Write-LauncherLog "Startup. repoRoot=$repoRoot elevated=$Elevated dryRun=$DryRun postInstallSelfTest=$PostInstallSelfTest"
@@ -55,21 +125,35 @@ try {
         $dotnetArguments += ' -- --post-install-self-test'
     }
 
+    $expectedAppVersion = Normalize-VersionText (Get-ExpectedAppVersion -RepoRoot $repoRoot)
+    if ($expectedAppVersion) {
+        Write-LauncherLog "Expected app version from Directory.Build.props: $expectedAppVersion"
+    }
+
     $appCandidates = @(
         (Join-Path $repoRoot 'WireguardSplitTunnel\WireguardSplitTunnel.App.exe'),
+        (Join-Path $repoRoot 'src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\WireguardSplitTunnel.App.exe'),
         (Join-Path $repoRoot 'src\WireguardSplitTunnel.App\bin\Release\net8.0-windows\win-x64\publish\WireguardSplitTunnel.App.exe'),
         (Join-Path $repoRoot 'src\WireguardSplitTunnel.App\bin\Debug\net8.0-windows\WireguardSplitTunnel.App.exe')
     )
     Write-LauncherLog ("App candidates: " + ($appCandidates -join '; '))
     $appCandidateFiles = $appCandidates |
         Where-Object { Test-Path $_ } |
-        ForEach-Object { Get-Item -LiteralPath $_ }
+        ForEach-Object { Get-AppFileVersionInfo -File (Get-Item -LiteralPath $_) }
     if ($appCandidateFiles) {
-        Write-LauncherLog ("Existing app candidates: " + (($appCandidateFiles | ForEach-Object { "$($_.FullName) ($($_.LastWriteTime.ToString('s')))" }) -join '; '))
+        Write-LauncherLog ("Existing app candidates: " + (($appCandidateFiles | ForEach-Object { "$($_.FullName) version=$($_.VersionText) ($($_.LastWriteTime.ToString('s')))" }) -join '; '))
     }
 
-    $appExe = $appCandidateFiles |
-        Sort-Object LastWriteTime -Descending |
+    $selectableCandidates = $appCandidateFiles
+    if ($expectedAppVersion) {
+        $selectableCandidates = $appCandidateFiles | Where-Object { $_.VersionText -eq $expectedAppVersion }
+        if (-not $selectableCandidates) {
+            Write-LauncherLog "No local exe matched expected version $expectedAppVersion. Falling back to dotnet/latest prebuilt path."
+        }
+    }
+
+    $appExe = $selectableCandidates |
+        Sort-Object @{ Expression = { $_.VersionKey }; Descending = $true }, @{ Expression = { $_.LastWriteTime }; Descending = $true } |
         Select-Object -First 1 -ExpandProperty FullName
     if ($appExe) {
         Write-LauncherLog "Resolved app exe: $appExe"
@@ -82,9 +166,15 @@ try {
                 Write-LauncherLog 'No local exe found. Attempting ensure-prebuilt.ps1.'
                 $downloadedExe = & $ensurePrebuiltScript -RepoRoot $repoRoot
                 if (-not [string]::IsNullOrWhiteSpace($downloadedExe) -and (Test-Path $downloadedExe)) {
-                    $appExe = $downloadedExe
-                    Write-LauncherLog "Prebuilt downloaded: $appExe"
-                    Write-Output "PREBUILT_DOWNLOADED $appExe"
+                    $downloadedInfo = Get-AppFileVersionInfo -File (Get-Item -LiteralPath $downloadedExe)
+                    if (-not $expectedAppVersion -or $downloadedInfo.VersionText -eq $expectedAppVersion) {
+                        $appExe = $downloadedExe
+                        Write-LauncherLog "Prebuilt downloaded: $appExe"
+                        Write-Output "PREBUILT_DOWNLOADED $appExe"
+                    }
+                    else {
+                        Write-LauncherLog "Downloaded prebuilt version $($downloadedInfo.VersionText) did not match expected $expectedAppVersion."
+                    }
                 }
             }
             catch {
