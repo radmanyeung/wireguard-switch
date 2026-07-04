@@ -99,10 +99,13 @@ Using The App
 -------------
 
 1. Open the app with Start WireGuard Split Tunnel.command or WireguardSplitTunnel.app.
-2. In Tunnel, choose a config from /opt/homebrew/etc/wireguard.
+2. If the official WireGuard app is already connected, leave it connected.
+   Otherwise, in Tunnel, choose a config from /opt/homebrew/etc/wireguard.
 3. Click Start AI VPN and approve the macOS administrator prompt.
-4. The app starts the tunnel, adds the AI Services Bundle, applies routes, and starts Monitor.
-5. In Monitor, check VPN/Normal speed, latency, and route classification.
+4. If WireGuard is already connected, the app reuses the existing utun tunnel.
+   If no WireGuard tunnel is active, the app starts the selected config first.
+5. The app adds the AI Services Bundle, applies routes, and starts Monitor.
+6. In Monitor, check VPN/Normal speed, latency, and route classification.
 
 Manual controls are still available. You can click Enable Tunnel, add presets
 in Domain Rules, and click Apply Routes yourself when you want to troubleshoot

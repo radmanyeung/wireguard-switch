@@ -166,14 +166,11 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         IEnumerable<string> activeTunnelNames)
     {
         var script = new StringBuilder();
-        foreach (var tunnelName in activeTunnelNames
-                     .Where(name => !string.IsNullOrWhiteSpace(name))
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            script.AppendLine($"{wgQuick} down {ShellQuote(tunnelName)} >/dev/null 2>&1 || true");
-        }
+        _ = activeTunnelNames;
 
-        // Bring down a same-named tunnel first so re-applies are idempotent.
+        // Bring down only the selected config first so re-applies are idempotent.
+        // Do not stop unrelated active tunnels: users may already have the official
+        // WireGuard app connected, and Start AI VPN should not break that tunnel.
         script.AppendLine($"{wgQuick} down {ShellQuote(configPath)} >/dev/null 2>&1 || true");
         script.AppendLine($"{wgQuick} up {ShellQuote(configPath)}");
         return script.ToString();

@@ -95,12 +95,15 @@ directly from Terminal:
 
 Inside the app, the easiest path is now:
 
-1. Choose a config from `/opt/homebrew/etc/wireguard`.
+1. If the official WireGuard app is already connected, leave it connected.
+   Otherwise choose a config from `/opt/homebrew/etc/wireguard`.
 2. Click **Start AI VPN**.
 3. Approve the macOS administrator prompt.
 
-The button starts the tunnel, adds the AI Services Bundle routes, applies the
-routes, and starts the Monitor tab.
+When WireGuard is already connected, the button reuses the existing `utun`
+tunnel and only adds the AI Services Bundle routes, applies the routes, and
+starts the Monitor tab. When no WireGuard tunnel is active, it starts the
+selected config first.
 
 If the app opens but the tunnel will not enable, this is a tunnel-setup issue,
 not an app-launch issue. Run `./check-mac-deps.sh` again, confirm that a real

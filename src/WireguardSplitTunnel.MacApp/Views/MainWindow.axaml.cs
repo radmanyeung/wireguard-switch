@@ -124,29 +124,49 @@ public partial class MainWindow : Window
         var currentSelection = (ConfigCombo.SelectedItem as TunnelConfigRow)?.Path
                                ?? selectedConfigPath
                                ?? appState.SelectedTunnelConfigPath;
-        var selection = MacQuickStartService.SelectConfig(currentSelection, discoveredConfigs);
-        RefreshTunnelConfigRows(selection.SelectedConfigPath ?? currentSelection);
+        detector.TryGetActiveInterface(out var existingInterfaceName);
+        var startPlan = MacQuickStartService.PlanStart(existingInterfaceName, currentSelection, discoveredConfigs);
+        RefreshTunnelConfigRows(startPlan.SelectedConfigPath ?? currentSelection);
 
-        if (selection.Status != MacQuickStartStatus.Success || string.IsNullOrWhiteSpace(selection.SelectedConfigPath))
+        if (startPlan.Status != MacQuickStartStatus.Success)
         {
             MainTabs.SelectedIndex = 0;
-            Log(selection.Message);
+            Log(startPlan.Message);
             return;
         }
 
-        selectedConfigPath = selection.SelectedConfigPath;
-        appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
-        SaveState();
-        RefreshTunnelConfigRows(selectedConfigPath);
+        if (!string.IsNullOrWhiteSpace(startPlan.SelectedConfigPath))
+        {
+            selectedConfigPath = startPlan.SelectedConfigPath;
+            appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
+            SaveState();
+            RefreshTunnelConfigRows(selectedConfigPath);
+        }
 
         StartAiVpnButton.IsEnabled = false;
         try
         {
             await RunGuardedAsync("start AI VPN", async ct =>
             {
-                Log(selection.Message);
-                await tunnelControl.InstallAndStartAsync(selectedConfigPath!, ct);
-                var iface = await WaitForWireGuardInterfaceAsync(ct);
+                Log(startPlan.Message);
+                var iface = startPlan.InterfaceName;
+                if (startPlan.ShouldStartTunnel)
+                {
+                    if (string.IsNullOrWhiteSpace(startPlan.SelectedConfigPath))
+                    {
+                        throw new InvalidOperationException(
+                            "Choose a WireGuard config, then click Start AI VPN again.");
+                    }
+
+                    await tunnelControl.InstallAndStartAsync(startPlan.SelectedConfigPath, ct);
+                    iface = await WaitForWireGuardInterfaceAsync(ct);
+                }
+                else if (string.IsNullOrWhiteSpace(iface))
+                {
+                    iface = await WaitForWireGuardInterfaceAsync(ct);
+                }
+
+                activeTunnelName = iface;
                 RefreshTunnelStatus();
                 EnsureAiServicesPreset();
                 await ApplyDomainRoutesAsync(iface, ct);

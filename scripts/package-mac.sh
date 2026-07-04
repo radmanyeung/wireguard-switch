@@ -108,7 +108,7 @@ set -u
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 app="$script_dir/WireguardSplitTunnel.app"
-exe="$app/Contents/MacOS/WireguardSplitTunnel"
+exe="$script_dir/WireguardSplitTunnel.app/Contents/MacOS/WireguardSplitTunnel"
 
 if [ ! -d "$app" ]; then
   echo "WireguardSplitTunnel.app was not found next to this launcher."

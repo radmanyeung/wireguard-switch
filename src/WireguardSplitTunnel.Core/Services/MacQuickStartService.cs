@@ -14,8 +14,40 @@ public sealed record MacQuickStartConfigResult(
     string? SelectedConfigPath,
     string Message);
 
+public sealed record MacQuickStartPlanResult(
+    MacQuickStartStatus Status,
+    string? SelectedConfigPath,
+    string? InterfaceName,
+    bool ShouldStartTunnel,
+    string Message);
+
 public static class MacQuickStartService
 {
+    public static MacQuickStartPlanResult PlanStart(
+        string? activeInterfaceName,
+        string? savedConfigPath,
+        IEnumerable<string> discoveredConfigPaths)
+    {
+        if (!string.IsNullOrWhiteSpace(activeInterfaceName))
+        {
+            var iface = activeInterfaceName.Trim();
+            return new MacQuickStartPlanResult(
+                MacQuickStartStatus.Success,
+                null,
+                iface,
+                ShouldStartTunnel: false,
+                $"Using existing WireGuard tunnel: {iface}");
+        }
+
+        var selection = SelectConfig(savedConfigPath, discoveredConfigPaths);
+        return new MacQuickStartPlanResult(
+            selection.Status,
+            selection.SelectedConfigPath,
+            InterfaceName: null,
+            ShouldStartTunnel: selection.Status == MacQuickStartStatus.Success,
+            selection.Message);
+    }
+
     public static MacQuickStartConfigResult SelectConfig(
         string? savedConfigPath,
         IEnumerable<string> discoveredConfigPaths)

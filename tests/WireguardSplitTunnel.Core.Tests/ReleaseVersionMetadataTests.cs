@@ -8,7 +8,7 @@ public sealed class ReleaseVersionMetadataTests
     [Fact]
     public void CentralVersion_IsCurrentReleaseVersion()
     {
-        ReadCentralVersion().Should().Be("0.1.6");
+        ReadCentralVersion().Should().Be("0.1.7");
     }
 
     [Fact]

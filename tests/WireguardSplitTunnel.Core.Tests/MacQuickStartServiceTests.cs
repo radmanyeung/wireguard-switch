@@ -6,6 +6,36 @@ namespace WireguardSplitTunnel.Core.Tests;
 public sealed class MacQuickStartServiceTests
 {
     [Fact]
+    public void PlanStart_UsesExistingWireGuardTunnelWithoutRequiringConfig()
+    {
+        var result = MacQuickStartService.PlanStart(
+            activeInterfaceName: "utun4",
+            savedConfigPath: null,
+            discoveredConfigPaths: []);
+
+        result.Status.Should().Be(MacQuickStartStatus.Success);
+        result.ShouldStartTunnel.Should().BeFalse();
+        result.InterfaceName.Should().Be("utun4");
+        result.SelectedConfigPath.Should().BeNull();
+        result.Message.Should().Contain("existing WireGuard tunnel");
+    }
+
+    [Fact]
+    public void PlanStart_SelectsConfigWhenNoWireGuardTunnelIsActive()
+    {
+        var result = MacQuickStartService.PlanStart(
+            activeInterfaceName: null,
+            savedConfigPath: "/opt/homebrew/etc/wireguard/SG.conf",
+            discoveredConfigPaths: ["/opt/homebrew/etc/wireguard/SG.conf"]);
+
+        result.Status.Should().Be(MacQuickStartStatus.Success);
+        result.ShouldStartTunnel.Should().BeTrue();
+        result.InterfaceName.Should().BeNull();
+        result.SelectedConfigPath.Should().Be("/opt/homebrew/etc/wireguard/SG.conf");
+        result.Message.Should().Contain("SG.conf");
+    }
+
+    [Fact]
     public void SelectConfig_UsesSavedConfigWhenItStillExists()
     {
         var result = MacQuickStartService.SelectConfig(

@@ -24,20 +24,18 @@ public sealed class MacTunnelControlServiceTests
     }
 
     [Fact]
-    public void BuildInstallAndStartScript_DownsActiveTunnelsBeforeStartingSelectedConfig()
+    public void BuildInstallAndStartScript_DoesNotStopUnrelatedActiveTunnels()
     {
         var script = MacTunnelControlService.BuildInstallAndStartScript(
             "/opt/homebrew/bin/wg-quick",
-            "/opt/homebrew/etc/wireguard/US.conf",
+            "/opt/homebrew/etc/wireguard/SG.conf",
             ["HK", "JP"]);
 
-        script.Should().Contain("/opt/homebrew/bin/wg-quick down \"HK\" >/dev/null 2>&1 || true");
-        script.Should().Contain("/opt/homebrew/bin/wg-quick down \"JP\" >/dev/null 2>&1 || true");
-        script.Should().Contain("/opt/homebrew/bin/wg-quick down \"/opt/homebrew/etc/wireguard/US.conf\" >/dev/null 2>&1 || true");
-        script.Should().Contain("/opt/homebrew/bin/wg-quick up \"/opt/homebrew/etc/wireguard/US.conf\"");
-        script.IndexOf("down \"HK\"", StringComparison.Ordinal)
-            .Should().BeLessThan(script.IndexOf("up \"/opt/homebrew/etc/wireguard/US.conf\"", StringComparison.Ordinal));
-        script.IndexOf("down \"JP\"", StringComparison.Ordinal)
-            .Should().BeLessThan(script.IndexOf("up \"/opt/homebrew/etc/wireguard/US.conf\"", StringComparison.Ordinal));
+        script.Should().NotContain("/opt/homebrew/bin/wg-quick down \"HK\"");
+        script.Should().NotContain("/opt/homebrew/bin/wg-quick down \"JP\"");
+        script.Should().Contain("/opt/homebrew/bin/wg-quick down \"/opt/homebrew/etc/wireguard/SG.conf\" >/dev/null 2>&1 || true");
+        script.Should().Contain("/opt/homebrew/bin/wg-quick up \"/opt/homebrew/etc/wireguard/SG.conf\"");
+        script.IndexOf("down \"/opt/homebrew/etc/wireguard/SG.conf\"", StringComparison.Ordinal)
+            .Should().BeLessThan(script.IndexOf("up \"/opt/homebrew/etc/wireguard/SG.conf\"", StringComparison.Ordinal));
     }
 }
