@@ -27,10 +27,24 @@ public static class DefaultRouteInspector
 
     /// <summary>Returns the IPv4 default-route interface, or null when it cannot be determined.</summary>
     [SupportedOSPlatform("macos")]
-    public static async Task<string?> GetDefaultRouteInterfaceAsync(CancellationToken cancellationToken)
+    public static Task<string?> GetDefaultRouteInterfaceAsync(CancellationToken cancellationToken) =>
+        GetDefaultRouteInterfaceAsync(
+            () => MacAdminShell.RunAsync("/sbin/route", "-n get default", cancellationToken));
+
+    internal static async Task<string?> GetDefaultRouteInterfaceAsync(Func<Task<MacShellResult>> runRouteGet)
     {
-        // `route -n get default` needs no root and prints an "interface:" line.
-        var result = await MacAdminShell.RunAsync("/sbin/route", "-n get default", cancellationToken);
+        MacShellResult result;
+        try
+        {
+            // `route -n get default` needs no root and prints an "interface:" line.
+            result = await runRouteGet();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // "Cannot be determined" must surface as null, not as a crash in the start flow.
+            return null;
+        }
+
         if (result.ExitCode != 0)
         {
             return null;

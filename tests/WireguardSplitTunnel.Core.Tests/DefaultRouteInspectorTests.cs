@@ -1,4 +1,5 @@
 using FluentAssertions;
+using WireguardSplitTunnel.Core.Platform;
 using WireguardSplitTunnel.Core.Services;
 
 namespace WireguardSplitTunnel.Core.Tests;
@@ -56,5 +57,41 @@ public sealed class DefaultRouteInspectorTests
     public void IsVpnInterface_MatchesUtunOnly(string? interfaceName, bool expected)
     {
         DefaultRouteInspector.IsVpnInterface(interfaceName).Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task GetDefaultRouteInterfaceAsync_ReturnsNullWhenShellThrows()
+    {
+        var result = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(
+            () => throw new InvalidOperationException("route missing"));
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetDefaultRouteInterfaceAsync_PropagatesCancellation()
+    {
+        var act = () => DefaultRouteInspector.GetDefaultRouteInterfaceAsync(
+            () => throw new OperationCanceledException());
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task GetDefaultRouteInterfaceAsync_ReturnsNullOnNonZeroExit()
+    {
+        var result = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(
+            () => Task.FromResult(new MacShellResult(1, string.Empty, "not in table")));
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetDefaultRouteInterfaceAsync_ParsesInterfaceFromShellOutput()
+    {
+        var result = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(
+            () => Task.FromResult(new MacShellResult(0, VpnDefaultRouteOutput, string.Empty)));
+
+        result.Should().Be("utun4");
     }
 }
