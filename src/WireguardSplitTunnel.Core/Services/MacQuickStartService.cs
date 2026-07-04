@@ -6,7 +6,8 @@ public enum MacQuickStartStatus
     MissingConfig = 2,
     MissingDependency = 3,
     TunnelFailed = 4,
-    RoutesFailed = 5
+    RoutesFailed = 5,
+    BlockedByOtherVpn = 6
 }
 
 public sealed record MacQuickStartConfigResult(
@@ -17,33 +18,30 @@ public sealed record MacQuickStartConfigResult(
 public sealed record MacQuickStartPlanResult(
     MacQuickStartStatus Status,
     string? SelectedConfigPath,
-    string? InterfaceName,
     bool ShouldStartTunnel,
     string Message);
 
 public static class MacQuickStartService
 {
     public static MacQuickStartPlanResult PlanStart(
-        string? activeInterfaceName,
+        string? defaultRouteInterfaceName,
         string? savedConfigPath,
         IEnumerable<string> discoveredConfigPaths)
     {
-        if (!string.IsNullOrWhiteSpace(activeInterfaceName))
+        if (DefaultRouteInspector.IsVpnInterface(defaultRouteInterfaceName))
         {
-            var iface = activeInterfaceName.Trim();
+            var iface = defaultRouteInterfaceName!.Trim();
             return new MacQuickStartPlanResult(
-                MacQuickStartStatus.Success,
+                MacQuickStartStatus.BlockedByOtherVpn,
                 null,
-                iface,
                 ShouldStartTunnel: false,
-                $"Using existing WireGuard tunnel: {iface}");
+                $"Another VPN currently routes all traffic ({iface}). Disconnect the WireGuard app (or other VPN) first, then click Start AI VPN again.");
         }
 
         var selection = SelectConfig(savedConfigPath, discoveredConfigPaths);
         return new MacQuickStartPlanResult(
             selection.Status,
             selection.SelectedConfigPath,
-            InterfaceName: null,
             ShouldStartTunnel: selection.Status == MacQuickStartStatus.Success,
             selection.Message);
     }

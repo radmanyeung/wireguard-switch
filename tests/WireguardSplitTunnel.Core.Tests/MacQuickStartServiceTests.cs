@@ -6,33 +6,43 @@ namespace WireguardSplitTunnel.Core.Tests;
 public sealed class MacQuickStartServiceTests
 {
     [Fact]
-    public void PlanStart_UsesExistingWireGuardTunnelWithoutRequiringConfig()
+    public void PlanStart_BlocksWhenAnotherVpnOwnsDefaultRoute()
     {
         var result = MacQuickStartService.PlanStart(
-            activeInterfaceName: "utun4",
-            savedConfigPath: null,
-            discoveredConfigPaths: []);
+            defaultRouteInterfaceName: "utun4",
+            savedConfigPath: "/opt/homebrew/etc/wireguard/SG.conf",
+            discoveredConfigPaths: ["/opt/homebrew/etc/wireguard/SG.conf"]);
 
-        result.Status.Should().Be(MacQuickStartStatus.Success);
+        result.Status.Should().Be(MacQuickStartStatus.BlockedByOtherVpn);
         result.ShouldStartTunnel.Should().BeFalse();
-        result.InterfaceName.Should().Be("utun4");
         result.SelectedConfigPath.Should().BeNull();
-        result.Message.Should().Contain("existing WireGuard tunnel");
+        result.Message.Should().Contain("Disconnect");
     }
 
     [Fact]
-    public void PlanStart_SelectsConfigWhenNoWireGuardTunnelIsActive()
+    public void PlanStart_SelectsConfigAndStartsTunnelOnNormalNetwork()
     {
         var result = MacQuickStartService.PlanStart(
-            activeInterfaceName: null,
+            defaultRouteInterfaceName: "en0",
             savedConfigPath: "/opt/homebrew/etc/wireguard/SG.conf",
             discoveredConfigPaths: ["/opt/homebrew/etc/wireguard/SG.conf"]);
 
         result.Status.Should().Be(MacQuickStartStatus.Success);
         result.ShouldStartTunnel.Should().BeTrue();
-        result.InterfaceName.Should().BeNull();
         result.SelectedConfigPath.Should().Be("/opt/homebrew/etc/wireguard/SG.conf");
         result.Message.Should().Contain("SG.conf");
+    }
+
+    [Fact]
+    public void PlanStart_StartsTunnelWhenDefaultRouteUnknown()
+    {
+        var result = MacQuickStartService.PlanStart(
+            defaultRouteInterfaceName: null,
+            savedConfigPath: "/opt/homebrew/etc/wireguard/SG.conf",
+            discoveredConfigPaths: ["/opt/homebrew/etc/wireguard/SG.conf"]);
+
+        result.Status.Should().Be(MacQuickStartStatus.Success);
+        result.ShouldStartTunnel.Should().BeTrue();
     }
 
     [Fact]
