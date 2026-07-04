@@ -97,11 +97,14 @@ public sealed class SystemWireguardDetector : IWireguardDetector
 
     internal static string? ChoosePreferredMacFallbackInterface(IEnumerable<MacWireguardInterfaceCandidate> candidates)
     {
+        // System utun interfaces (iCloud Private Relay etc.) are always up but
+        // IPv6-only. A WireGuard tunnel from a .conf always has an IPv4 address,
+        // so anything without IPv4 is not ours — exclude it, don't just rank it last.
         return candidates
             .Where(candidate => candidate.IsUp)
+            .Where(candidate => candidate.HasIpv4)
             .Where(candidate => candidate.Name.StartsWith("utun", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(candidate => candidate.HasIpv4)
-            .ThenBy(candidate => ParseUtunIndex(candidate.Name))
+            .OrderBy(candidate => ParseUtunIndex(candidate.Name))
             .ThenBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
             .Select(candidate => candidate.Name)
             .FirstOrDefault();

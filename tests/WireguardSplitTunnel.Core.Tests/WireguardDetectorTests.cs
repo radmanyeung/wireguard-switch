@@ -24,10 +24,26 @@ public sealed class WireguardDetectorTests
         var selected = SystemWireguardDetector.ChoosePreferredMacFallbackInterface(
             [
                 new MacWireguardInterfaceCandidate("utun2", IsUp: false, HasIpv4: true),
-                new MacWireguardInterfaceCandidate("utun3", IsUp: true, HasIpv4: false)
+                new MacWireguardInterfaceCandidate("utun3", IsUp: true, HasIpv4: true)
             ]);
 
         selected.Should().Be("utun3");
+    }
+
+    [Fact]
+    public void ChoosePreferredMacFallbackInterface_ReturnsNullWhenOnlyIpv6SystemUtunsExist()
+    {
+        // A Mac with no WireGuard running still has up, IPv6-only utun0-3
+        // (iCloud Private Relay etc.). They must never be reported as tunnels.
+        var selected = SystemWireguardDetector.ChoosePreferredMacFallbackInterface(
+            [
+                new MacWireguardInterfaceCandidate("utun0", IsUp: true, HasIpv4: false),
+                new MacWireguardInterfaceCandidate("utun1", IsUp: true, HasIpv4: false),
+                new MacWireguardInterfaceCandidate("utun2", IsUp: true, HasIpv4: false),
+                new MacWireguardInterfaceCandidate("utun3", IsUp: true, HasIpv4: false)
+            ]);
+
+        selected.Should().BeNull();
     }
 
     [Theory]
