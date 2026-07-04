@@ -120,29 +120,30 @@ public partial class MainWindow : Window
 
     private async void OnStartAiVpnClick(object? sender, RoutedEventArgs e)
     {
-        var discoveredConfigs = WireguardConfigCatalog.DiscoverConfigPaths();
-        var currentSelection = (ConfigCombo.SelectedItem as TunnelConfigRow)?.Path
-                               ?? selectedConfigPath
-                               ?? appState.SelectedTunnelConfigPath;
-        var defaultRouteInterface = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(CancellationToken.None);
-        var startPlan = MacQuickStartService.PlanStart(defaultRouteInterface, currentSelection, discoveredConfigs);
-        RefreshTunnelConfigRows(startPlan.SelectedConfigPath ?? currentSelection);
-
-        if (startPlan.Status != MacQuickStartStatus.Success || string.IsNullOrWhiteSpace(startPlan.SelectedConfigPath))
-        {
-            MainTabs.SelectedIndex = 0;
-            Log(startPlan.Message);
-            return;
-        }
-
-        selectedConfigPath = startPlan.SelectedConfigPath;
-        appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
-        SaveState();
-        RefreshTunnelConfigRows(selectedConfigPath);
-
+        // Disable before the first await so a double-click cannot race two starts.
         StartAiVpnButton.IsEnabled = false;
         try
         {
+            var discoveredConfigs = WireguardConfigCatalog.DiscoverConfigPaths();
+            var currentSelection = (ConfigCombo.SelectedItem as TunnelConfigRow)?.Path
+                                   ?? selectedConfigPath
+                                   ?? appState.SelectedTunnelConfigPath;
+            var defaultRouteInterface = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(CancellationToken.None);
+            var startPlan = MacQuickStartService.PlanStart(defaultRouteInterface, currentSelection, discoveredConfigs);
+            RefreshTunnelConfigRows(startPlan.SelectedConfigPath ?? currentSelection);
+
+            if (startPlan.Status != MacQuickStartStatus.Success || string.IsNullOrWhiteSpace(startPlan.SelectedConfigPath))
+            {
+                MainTabs.SelectedIndex = 0;
+                Log(startPlan.Message);
+                return;
+            }
+
+            selectedConfigPath = startPlan.SelectedConfigPath;
+            appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
+            SaveState();
+            RefreshTunnelConfigRows(selectedConfigPath);
+
             await RunGuardedAsync("start AI VPN", async ct =>
             {
                 Log(startPlan.Message);
@@ -195,19 +196,28 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunGuardedAsync("enable tunnel", async ct =>
+        // Disable before the first await so a double-click cannot stack admin prompts.
+        EnableTunnelButton.IsEnabled = false;
+        try
         {
-            var defaultRouteInterface = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(ct);
-            if (DefaultRouteInspector.IsVpnInterface(defaultRouteInterface))
+            await RunGuardedAsync("enable tunnel", async ct =>
             {
-                throw new InvalidOperationException(
-                    $"Another VPN currently routes all traffic ({defaultRouteInterface}). Disconnect it first, then try again.");
-            }
+                var defaultRouteInterface = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(ct);
+                if (DefaultRouteInspector.IsVpnInterface(defaultRouteInterface))
+                {
+                    throw new InvalidOperationException(
+                        $"Another VPN currently routes all traffic ({defaultRouteInterface}). Disconnect it first, then try again.");
+                }
 
-            await tunnelControl.InstallAndStartAsync(selectedConfigPath!, ct);
-            await Task.Delay(500, ct);
-            RefreshTunnelStatus();
-        });
+                await tunnelControl.InstallAndStartAsync(selectedConfigPath!, ct);
+                await Task.Delay(500, ct);
+                RefreshTunnelStatus();
+            });
+        }
+        finally
+        {
+            EnableTunnelButton.IsEnabled = true;
+        }
     }
 
     private async void OnDisableTunnelClick(object? sender, RoutedEventArgs e)
@@ -234,25 +244,34 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunGuardedAsync("disable tunnel", async ct =>
+        // Disable before the first await so a double-click cannot stack admin prompts.
+        DisableTunnelButton.IsEnabled = false;
+        try
         {
-            foreach (var target in targets)
+            await RunGuardedAsync("disable tunnel", async ct =>
             {
-                try
+                foreach (var target in targets)
                 {
-                    await tunnelControl.StopAndUninstallAsync(target, ct);
-                    Log($"stopped: {Path.GetFileName(target)}");
+                    try
+                    {
+                        await tunnelControl.StopAndUninstallAsync(target, ct);
+                        Log($"stopped: {Path.GetFileName(target)}");
+                    }
+                    catch (Exception ex)
+                    {
+                        // Not every target is necessarily up; keep going.
+                        Log($"stop {Path.GetFileName(target)}: {ToFriendlyMacError(ex.Message)}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    // Not every target is necessarily up; keep going.
-                    Log($"stop {Path.GetFileName(target)}: {ToFriendlyMacError(ex.Message)}");
-                }
-            }
 
-            await Task.Delay(300, ct);
-            RefreshTunnelStatus();
-        });
+                await Task.Delay(300, ct);
+                RefreshTunnelStatus();
+            });
+        }
+        finally
+        {
+            DisableTunnelButton.IsEnabled = true;
+        }
     }
 
     private void OnRefreshStatusClick(object? sender, RoutedEventArgs e)
