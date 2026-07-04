@@ -64,9 +64,25 @@ public static class MacSplitTunnelConfigService
 
         Directory.CreateDirectory(dataDirectory);
         var derivedPath = Path.Combine(dataDirectory, SplitTunnelConfigFileName);
-        File.WriteAllText(derivedPath, BuildSplitTunnelConfig(originalText));
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write
+        };
         if (!OperatingSystem.IsWindows())
         {
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
+        using (var writer = new StreamWriter(new FileStream(derivedPath, options)))
+        {
+            writer.Write(BuildSplitTunnelConfig(originalText));
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            // UnixCreateMode only applies at creation; if the file already
+            // existed with looser permissions from an earlier run, repair it.
             File.SetUnixFileMode(derivedPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
 
