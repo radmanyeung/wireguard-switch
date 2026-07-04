@@ -32,9 +32,12 @@ it, and protect the file permissions:
 
    sudo mkdir -p /opt/homebrew/etc/wireguard
    sudo cp "/path/to/your-vpn.conf" /opt/homebrew/etc/wireguard/
+   sudo chown "$USER" /opt/homebrew/etc/wireguard/*.conf
    sudo chmod 600 /opt/homebrew/etc/wireguard/*.conf
 
 Replace /path/to/your-vpn.conf with the real path to your configuration.
+The config must be owned by your user account (not root) so the app can read
+it to build its split-tunnel variant; mode 600 keeps it private.
 
 Before Opening
 --------------
@@ -99,13 +102,17 @@ Using The App
 -------------
 
 1. Open the app with Start WireGuard Split Tunnel.command or WireguardSplitTunnel.app.
-2. If the official WireGuard app is already connected, leave it connected.
-   Otherwise, in Tunnel, choose a config from /opt/homebrew/etc/wireguard.
-3. Click Start AI VPN and approve the macOS administrator prompt.
-4. If WireGuard is already connected, the app reuses the existing utun tunnel.
-   If no WireGuard tunnel is active, the app starts the selected config first.
-5. The app adds the AI Services Bundle, applies routes, and starts Monitor.
-6. In Monitor, check VPN/Normal speed, latency, and route classification.
+2. Disconnect the official WireGuard app if it is connected. Start AI VPN
+   needs to own the tunnel; it will refuse to run while another VPN routes
+   all traffic.
+3. In Tunnel, choose a config from /opt/homebrew/etc/wireguard.
+4. Click Start AI VPN and approve the macOS administrator prompt.
+5. Start AI VPN creates a split tunnel: only the AI Services Bundle domains
+   go through WireGuard; all other traffic and system DNS stay on your normal
+   network. The tunnel runs under the name wgst-split (a derived copy of your
+   config with Table = off); your original config file is never modified.
+6. The app adds the AI Services Bundle, applies routes, and starts Monitor.
+7. In Monitor, check VPN/Normal speed, latency, and route classification.
 
 Manual controls are still available. You can click Enable Tunnel, add presets
 in Domain Rules, and click Apply Routes yourself when you want to troubleshoot

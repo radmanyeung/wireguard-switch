@@ -1,5 +1,14 @@
 # LOGFILE
 
+## 2026-07-04
+- Diagnosed macOS "Start AI VPN" failures: system utun0 misdetected as WireGuard tunnel; full-tunnel NordVPN config hijacked all traffic; double tunnel with the official WireGuard app blacked out the network.
+- Detector fallback now requires IPv4 on utun candidates (system utun0-3 are IPv6-only and are never WireGuard).
+- Start AI VPN now starts a derived `wgst-split` config with `Table = off` and no DNS override: only AI domain routes go through the tunnel, system DNS and default route stay on the normal network.
+- Added default-route guard: Start AI VPN / Enable Tunnel refuse to run while another VPN (utun default route) is connected, instead of silently double-tunneling.
+- Disable Tunnel now also brings down the `wgst-split` tunnel; tunnel buttons are disabled during operations to prevent double-click races.
+- Docs now tell users to chown configs to their own account, since the app must read the config to derive the split variant.
+- Risk/follow-up: IPv6 AI traffic is not routed through the tunnel (host routes are IPv4-only today); revisit if AI endpoints go IPv6-first.
+
 ## 2026-04-02
 - Added `Restore normal routing when app exits` option and exit-time route restore flow.
 - Added `Software Self Test` button and checks (exe path, firewall rule match, routing compatibility).

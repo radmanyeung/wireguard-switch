@@ -55,8 +55,12 @@ and copy your configuration into it:
 brew install wireguard-tools bash
 sudo mkdir -p /opt/homebrew/etc/wireguard
 sudo cp "/path/to/your-vpn.conf" /opt/homebrew/etc/wireguard/
+sudo chown "$USER" /opt/homebrew/etc/wireguard/*.conf
 sudo chmod 600 /opt/homebrew/etc/wireguard/*.conf
 ```
+
+The config must be owned by your user account (not root) so the app can read
+it to build its split-tunnel variant; mode 600 keeps it private.
 
 Replace `/path/to/your-vpn.conf` with the real path to your configuration. Then
 check the dependencies from the extracted release folder:
@@ -95,15 +99,16 @@ directly from Terminal:
 
 Inside the app, the easiest path is now:
 
-1. If the official WireGuard app is already connected, leave it connected.
-   Otherwise choose a config from `/opt/homebrew/etc/wireguard`.
-2. Click **Start AI VPN**.
-3. Approve the macOS administrator prompt.
+1. Disconnect the official WireGuard app if it is connected. Start AI VPN
+   needs to own the tunnel; it will refuse to run while another VPN routes
+   all traffic.
+2. Choose a config from `/opt/homebrew/etc/wireguard`.
+3. Click **Start AI VPN** and approve the macOS administrator prompt.
 
-When WireGuard is already connected, the button reuses the existing `utun`
-tunnel and only adds the AI Services Bundle routes, applies the routes, and
-starts the Monitor tab. When no WireGuard tunnel is active, it starts the
-selected config first.
+Start AI VPN creates a split tunnel: only the AI Services Bundle domains go
+through WireGuard; all other traffic and system DNS stay on your normal
+network. The tunnel runs under the name `wgst-split` (a derived copy of your
+config with `Table = off`); your original config file is never modified.
 
 If the app opens but the tunnel will not enable, this is a tunnel-setup issue,
 not an app-launch issue. Run `./check-mac-deps.sh` again, confirm that a real
