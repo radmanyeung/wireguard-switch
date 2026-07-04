@@ -124,24 +124,21 @@ public partial class MainWindow : Window
         var currentSelection = (ConfigCombo.SelectedItem as TunnelConfigRow)?.Path
                                ?? selectedConfigPath
                                ?? appState.SelectedTunnelConfigPath;
-        detector.TryGetActiveInterface(out var existingInterfaceName);
-        var startPlan = MacQuickStartService.PlanStart(existingInterfaceName, currentSelection, discoveredConfigs);
+        var defaultRouteInterface = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(CancellationToken.None);
+        var startPlan = MacQuickStartService.PlanStart(defaultRouteInterface, currentSelection, discoveredConfigs);
         RefreshTunnelConfigRows(startPlan.SelectedConfigPath ?? currentSelection);
 
-        if (startPlan.Status != MacQuickStartStatus.Success)
+        if (startPlan.Status != MacQuickStartStatus.Success || string.IsNullOrWhiteSpace(startPlan.SelectedConfigPath))
         {
             MainTabs.SelectedIndex = 0;
             Log(startPlan.Message);
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(startPlan.SelectedConfigPath))
-        {
-            selectedConfigPath = startPlan.SelectedConfigPath;
-            appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
-            SaveState();
-            RefreshTunnelConfigRows(selectedConfigPath);
-        }
+        selectedConfigPath = startPlan.SelectedConfigPath;
+        appState = appState with { SelectedTunnelConfigPath = selectedConfigPath };
+        SaveState();
+        RefreshTunnelConfigRows(selectedConfigPath);
 
         StartAiVpnButton.IsEnabled = false;
         try
@@ -149,23 +146,11 @@ public partial class MainWindow : Window
             await RunGuardedAsync("start AI VPN", async ct =>
             {
                 Log(startPlan.Message);
-                var iface = startPlan.InterfaceName;
-                if (startPlan.ShouldStartTunnel)
-                {
-                    if (string.IsNullOrWhiteSpace(startPlan.SelectedConfigPath))
-                    {
-                        throw new InvalidOperationException(
-                            "Choose a WireGuard config, then click Start AI VPN again.");
-                    }
-
-                    await tunnelControl.InstallAndStartAsync(startPlan.SelectedConfigPath, ct);
-                    iface = await WaitForWireGuardInterfaceAsync(ct);
-                }
-                else if (string.IsNullOrWhiteSpace(iface))
-                {
-                    iface = await WaitForWireGuardInterfaceAsync(ct);
-                }
-
+                var splitConfigPath = MacSplitTunnelConfigService.WriteSplitTunnelConfig(
+                    selectedConfigPath!, GetDataDirectory());
+                Log($"split tunnel config ready: {splitConfigPath} (Table=off, system DNS kept)");
+                await tunnelControl.InstallAndStartAsync(splitConfigPath, ct);
+                var iface = await WaitForWireGuardInterfaceAsync(ct);
                 activeTunnelName = iface;
                 RefreshTunnelStatus();
                 EnsureAiServicesPreset();
@@ -212,6 +197,13 @@ public partial class MainWindow : Window
 
         await RunGuardedAsync("enable tunnel", async ct =>
         {
+            var defaultRouteInterface = await DefaultRouteInspector.GetDefaultRouteInterfaceAsync(ct);
+            if (DefaultRouteInspector.IsVpnInterface(defaultRouteInterface))
+            {
+                throw new InvalidOperationException(
+                    $"Another VPN currently routes all traffic ({defaultRouteInterface}). Disconnect it first, then try again.");
+            }
+
             await tunnelControl.InstallAndStartAsync(selectedConfigPath!, ct);
             await Task.Delay(500, ct);
             RefreshTunnelStatus();
@@ -220,19 +212,44 @@ public partial class MainWindow : Window
 
     private async void OnDisableTunnelClick(object? sender, RoutedEventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(selectedConfigPath) && string.IsNullOrWhiteSpace(activeTunnelName))
+        var splitConfigPath = Path.Combine(GetDataDirectory(), MacSplitTunnelConfigService.SplitTunnelConfigFileName);
+        var targets = new List<string>();
+        if (File.Exists(splitConfigPath))
+        {
+            targets.Add(splitConfigPath);
+        }
+
+        if (!string.IsNullOrWhiteSpace(selectedConfigPath))
+        {
+            targets.Add(WireguardConfigCatalog.GetTunnelName(selectedConfigPath!));
+        }
+        else if (!string.IsNullOrWhiteSpace(activeTunnelName))
+        {
+            targets.Add(activeTunnelName!);
+        }
+
+        if (targets.Count == 0)
         {
             Log("nothing to disable.");
             return;
         }
 
-        var name = !string.IsNullOrWhiteSpace(selectedConfigPath)
-            ? WireguardConfigCatalog.GetTunnelName(selectedConfigPath!)
-            : activeTunnelName!;
-
         await RunGuardedAsync("disable tunnel", async ct =>
         {
-            await tunnelControl.StopAndUninstallAsync(name, ct);
+            foreach (var target in targets)
+            {
+                try
+                {
+                    await tunnelControl.StopAndUninstallAsync(target, ct);
+                    Log($"stopped: {Path.GetFileName(target)}");
+                }
+                catch (Exception ex)
+                {
+                    // Not every target is necessarily up; keep going.
+                    Log($"stop {Path.GetFileName(target)}: {ToFriendlyMacError(ex.Message)}");
+                }
+            }
+
             await Task.Delay(300, ct);
             RefreshTunnelStatus();
         });
