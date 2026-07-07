@@ -26,7 +26,10 @@ public static class DomainPresetService
         "oaistatic.com",
         "*.oaistatic.com",
         "oaiusercontent.com",
-        "*.oaiusercontent.com"
+        "*.oaiusercontent.com",
+        "files.oaiusercontent.com",
+        "challenges.cloudflare.com",
+        "cdn.auth0.com"
     ];
 
     private static readonly string[] ClaudeAnthropicDomains =
