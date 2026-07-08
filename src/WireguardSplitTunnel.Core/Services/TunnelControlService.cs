@@ -146,19 +146,12 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         }
     }
 
-    private static string ResolveWgQuick()
-    {
-        foreach (var candidate in WgQuickCandidates)
-        {
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
+    internal static string? TryResolveWgQuick() => WgQuickCandidates.FirstOrDefault(File.Exists);
 
-        throw new FileNotFoundException(
+    private static string ResolveWgQuick() =>
+        TryResolveWgQuick()
+        ?? throw new FileNotFoundException(
             "wg-quick not found. Install WireGuard tools via 'brew install wireguard-tools'.");
-    }
 
     internal static string BuildInstallAndStartScript(
         string wgQuick,
@@ -212,10 +205,5 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         return string.IsNullOrWhiteSpace(tunnelName) ? null : tunnelName;
     }
 
-    private static string ShellQuote(string value) =>
-        "\"" + value
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal)
-            .Replace("$", "\\$", StringComparison.Ordinal)
-            .Replace("`", "\\`", StringComparison.Ordinal) + "\"";
+    private static string ShellQuote(string value) => ShellQuoting.Quote(value);
 }

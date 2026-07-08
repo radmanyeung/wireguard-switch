@@ -96,4 +96,53 @@ public sealed class MacSplitTunnelConfigServiceTests
             Directory.Delete(workDir, recursive: true);
         }
     }
+
+    [Fact]
+    public void ExtractDnsServers_ReadsCommaSeparatedInterfaceDns()
+    {
+        MacSplitTunnelConfigService.ExtractDnsServers(NordConfig)
+            .Should().Equal("103.86.96.100", "103.86.99.100");
+    }
+
+    [Fact]
+    public void ExtractDnsServers_MultipleDnsLines_CollectsAll()
+    {
+        const string config = """
+            [Interface]
+            dns = 10.0.0.1
+            DNS = 10.0.0.2
+
+            [Peer]
+            AllowedIPs = 0.0.0.0/0
+            """;
+
+        MacSplitTunnelConfigService.ExtractDnsServers(config)
+            .Should().Equal("10.0.0.1", "10.0.0.2");
+    }
+
+    [Fact]
+    public void ExtractDnsServers_NoDns_ReturnsEmpty()
+    {
+        const string config = """
+            [Interface]
+            Address = 10.5.0.2/32
+
+            [Peer]
+            AllowedIPs = 0.0.0.0/0
+            """;
+
+        MacSplitTunnelConfigService.ExtractDnsServers(config).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ExtractDnsServers_IgnoresDnsOutsideInterfaceSection()
+    {
+        const string config = """
+            [Peer]
+            DNS = 9.9.9.9
+            AllowedIPs = 0.0.0.0/0
+            """;
+
+        MacSplitTunnelConfigService.ExtractDnsServers(config).Should().BeEmpty();
+    }
 }

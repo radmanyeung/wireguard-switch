@@ -89,6 +89,37 @@ public sealed class StateStoreTests
     }
 
     [Fact]
+    public void SaveAndLoad_RoundTripsActiveRawTunnelName()
+    {
+        var path = CreateTestPath();
+        var store = new StateStore(path);
+        var original = new AppState([], [], []) with { ActiveRawTunnelName = "SG" };
+
+        store.Save(original);
+
+        store.Load().ActiveRawTunnelName.Should().Be("SG");
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_OldStateFileWithoutActiveRawTunnelName_DefaultsToNull()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, """{ "DomainRules": [] }""");
+
+        new StateStore(path).Load().ActiveRawTunnelName.Should().BeNull();
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_ThrowsInvalidDataException_ForCorruptNonEmptyJson()
     {
         var path = CreateTestPath();

@@ -9,6 +9,10 @@ public static class MacAdminShell
 {
     private const string AdminPathPrefix = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
+    // No BOM: a UTF-8 BOM before "#!" defeats shebang detection and the script
+    // falls back to /bin/sh with a bogus "bash: No such file or directory" on stderr.
+    internal static readonly Encoding ScriptEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     public static async Task<MacShellResult> RunAsAdminAsync(
         string scriptBody,
         string promptReason,
@@ -23,7 +27,7 @@ public static class MacAdminShell
         // embedded backslashes/quotes escaped. We bounce through a temp file so
         // very long batches don't bump into the AppleScript literal-length cap.
         var tempScript = Path.Combine(Path.GetTempPath(), $"wgst-{Guid.NewGuid():N}.sh");
-        await File.WriteAllTextAsync(tempScript, BuildScriptContent(scriptBody), Encoding.UTF8, cancellationToken);
+        await WriteScriptFileAsync(tempScript, scriptBody, cancellationToken);
 
         try
         {
@@ -76,6 +80,9 @@ public static class MacAdminShell
         .Replace("\\", "\\\\", StringComparison.Ordinal)
         .Replace("\"", "\\\"", StringComparison.Ordinal);
 
+    internal static Task WriteScriptFileAsync(string path, string scriptBody, CancellationToken cancellationToken)
+        => File.WriteAllTextAsync(path, BuildScriptContent(scriptBody), ScriptEncoding, cancellationToken);
+
     internal static string BuildScriptContent(string scriptBody)
     {
         return $"#!{ResolvePreferredBashPath(File.Exists)}\n"
@@ -96,6 +103,18 @@ public static class MacAdminShell
 
         return "/bin/bash";
     }
+}
+
+// Pure string helper kept outside MacAdminShell so callers composing scripts
+// on any platform (including unit tests) don't trip CA1416.
+internal static class ShellQuoting
+{
+    internal static string Quote(string value) =>
+        "\"" + value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal)
+            .Replace("$", "\\$", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal) + "\"";
 }
 
 public readonly record struct MacShellResult(int ExitCode, string StandardOutput, string StandardError)

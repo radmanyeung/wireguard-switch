@@ -71,17 +71,19 @@ public static class RuleStateMutations
             pair => pair.Value.Select(detail => detail with { }).ToList(),
             StringComparer.OrdinalIgnoreCase);
 
-        return new AppState(
-            rules,
-            resolved,
-            snapshot,
-            state.SelectedTunnelConfigPath,
-            state.AutoEnableTunnel,
-            software,
-            state.DomainGlobalDefaultMode,
-            state.SoftwareGlobalDefaultMode,
-            state.RestoreNormalRoutingOnExit,
-            details);
+        // `with` keeps scalar fields (including ones added later) without this
+        // method having to enumerate them; only collections need deep copies.
+        return state with
+        {
+            DomainRules = rules,
+            LastKnownResolvedIps = resolved,
+            ManagedRouteSnapshot = snapshot,
+            SoftwareRules = software,
+            LastKnownResolvedIpDetails = details,
+            MacTunnelProfiles = state.MacTunnelProfiles.Select(profile => profile with { }).ToList(),
+            MacSoftwareRules = state.MacSoftwareRules.Select(rule => rule with { }).ToList(),
+            MacDomainProfileAssignments = state.MacDomainProfileAssignments.Select(assignment => assignment with { }).ToList()
+        };
     }
 
     private static string NormalizeDomain(string domain) => domain.Trim().ToLowerInvariant();

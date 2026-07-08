@@ -49,6 +49,36 @@ public static class MacSplitTunnelConfigService
             && line[key.Length..].TrimStart().StartsWith('=');
     }
 
+    public static IReadOnlyList<string> ExtractDnsServers(string configText)
+    {
+        var servers = new List<string>();
+        var inInterfaceSection = false;
+
+        foreach (var rawLine in configText.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith('['))
+            {
+                inInterfaceSection = line.Equals("[Interface]", StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+
+            if (!inInterfaceSection
+                || !line.StartsWith("DNS", StringComparison.OrdinalIgnoreCase)
+                || !line[3..].TrimStart().StartsWith('='))
+            {
+                continue;
+            }
+
+            var value = line[(line.IndexOf('=') + 1)..];
+            servers.AddRange(value
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(entry => entry.Length > 0));
+        }
+
+        return servers;
+    }
+
     public static string WriteSplitTunnelConfig(string originalConfigPath, string dataDirectory)
     {
         string originalText;

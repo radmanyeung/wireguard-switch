@@ -13,7 +13,11 @@ public sealed record AppState(
     Dictionary<string, List<ResolvedIpDetail>>? LastKnownResolvedIpDetails = null,
     List<MacTunnelProfile>? MacTunnelProfiles = null,
     List<MacSoftwareRule>? MacSoftwareRules = null,
-    List<MacDomainProfileAssignment>? MacDomainProfileAssignments = null)
+    List<MacDomainProfileAssignment>? MacDomainProfileAssignments = null,
+    // wg-quick tunnel started via the raw "Enable Tunnel" path (full tunnel:
+    // default route + DNS override). Persisted so a restart still knows a
+    // teardown is owed even after a crash.
+    string? ActiveRawTunnelName = null)
 {
     public Dictionary<string, List<ResolvedIpDetail>> LastKnownResolvedIpDetails { get; init; } =
         LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(StringComparer.OrdinalIgnoreCase);

@@ -24,4 +24,32 @@ public sealed class MacAdminShellTests
         script.Should().Contain("export PATH=\"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"");
         script.Should().EndWith("wg-quick up /opt/homebrew/etc/wireguard/HK.conf");
     }
+
+    [Fact]
+    public void ScriptEncoding_EmitsNoByteOrderMark()
+    {
+        MacAdminShell.ScriptEncoding.GetPreamble().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WriteScriptFileAsync_FileStartsWithShebangBytesNotBom()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"wgst-test-{Guid.NewGuid():N}.sh");
+        try
+        {
+            await MacAdminShell.WriteScriptFileAsync(path, "echo hi", CancellationToken.None);
+
+            var bytes = await File.ReadAllBytesAsync(path);
+            bytes.Length.Should().BeGreaterThan(2);
+            // A UTF-8 BOM (EF BB BF) before "#!" makes the kernel ignore the shebang,
+            // so the script silently runs under /bin/sh and stderr gains a bogus
+            // "/opt/homebrew/bin/bash: No such file or directory" line.
+            bytes[0].Should().Be((byte)'#');
+            bytes[1].Should().Be((byte)'!');
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
+        }
+    }
 }

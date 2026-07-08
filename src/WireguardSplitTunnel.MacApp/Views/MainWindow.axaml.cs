@@ -30,6 +30,9 @@ public partial class MainWindow : Window
     private int monitorRefreshInProgress;
     private int monitorRunGeneration;
     private bool suppressConfigSelectionChanged;
+    private bool suppressRestoreOnExitChanged;
+    private bool allowCloseWithoutRestore;
+    private bool exitCleanupInProgress;
 
     public MainWindow()
     {
@@ -48,6 +51,7 @@ public partial class MainWindow : Window
         appState = stateStore.Load();
 
         LoadStateToUi();
+        AdoptLeftoverTunnel();
         RefreshTunnelStatus();
         monitorTimer.Tick += OnMonitorTimerTick;
         MonitorGraphCanvas.SizeChanged += OnMonitorGraphCanvasSizeChanged;
@@ -210,6 +214,11 @@ public partial class MainWindow : Window
                 }
 
                 await tunnelControl.InstallAndStartAsync(selectedConfigPath!, ct);
+                // Remember that a full tunnel is up so a later session still
+                // knows a teardown (route + DNS restore) is owed after a crash.
+                appState = appState with { ActiveRawTunnelName = WireguardConfigCatalog.GetTunnelName(selectedConfigPath!) };
+                SaveState();
+                Log("full tunnel enabled: ALL traffic and DNS now go through the VPN until you disable it.");
                 await Task.Delay(500, ct);
                 RefreshTunnelStatus();
             });
@@ -229,6 +238,11 @@ public partial class MainWindow : Window
             targets.Add(splitConfigPath);
         }
 
+        if (!string.IsNullOrWhiteSpace(appState.ActiveRawTunnelName))
+        {
+            targets.Add(appState.ActiveRawTunnelName!);
+        }
+
         if (!string.IsNullOrWhiteSpace(selectedConfigPath))
         {
             targets.Add(WireguardConfigCatalog.GetTunnelName(selectedConfigPath!));
@@ -238,6 +252,7 @@ public partial class MainWindow : Window
             targets.Add(activeTunnelName!);
         }
 
+        targets = targets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (targets.Count == 0)
         {
             Log("nothing to disable.");
@@ -262,6 +277,12 @@ public partial class MainWindow : Window
                         // Not every target is necessarily up; keep going.
                         Log($"stop {Path.GetFileName(target)}: {ToFriendlyMacError(ex.Message)}");
                     }
+                }
+
+                if (!string.IsNullOrWhiteSpace(appState.ActiveRawTunnelName))
+                {
+                    appState = appState with { ActiveRawTunnelName = null };
+                    SaveState();
                 }
 
                 await Task.Delay(300, ct);
@@ -363,21 +384,33 @@ public partial class MainWindow : Window
             .Select(entry => entry.IpAddress)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        if (managedIps.Count == 0)
-        {
-            Log("no managed routes to restore.");
-            return;
-        }
 
-        detector.TryGetActiveInterface(out var iface);
-        iface = string.IsNullOrWhiteSpace(iface) ? activeTunnelName ?? "utun0" : iface;
         await RunGuardedAsync("restore normal routes", async ct =>
         {
-            await routeService.ApplyAsync(iface, [], managedIps, ct);
-            appState = appState with { ManagedRouteSnapshot = [] };
-            SaveState();
-            RefreshDomainRows();
-            Log($"removed {managedIps.Count} managed route(s).");
+            var dnsServices = await DiscoverTunnelDnsServicesAsync(ct);
+            if (managedIps.Count == 0 && dnsServices.Count == 0)
+            {
+                Log("no managed routes or DNS overrides to restore.");
+                return;
+            }
+
+            // Route deletes and DNS resets go through one batched admin script.
+            await MacExitCleanupService.RunAsync(
+                splitConfigPath: null,
+                rawTunnelName: null,
+                managedIps,
+                dnsServices,
+                "WireGuard split tunnel needs to restore routes and DNS",
+                ct);
+
+            if (managedIps.Count > 0)
+            {
+                appState = appState with { ManagedRouteSnapshot = [] };
+                SaveState();
+                RefreshDomainRows();
+            }
+
+            Log($"removed {managedIps.Count} managed route(s); restored DHCP DNS on {dnsServices.Count} service(s).");
         });
     }
 
@@ -728,6 +761,27 @@ public partial class MainWindow : Window
         RefreshTunnelConfigRows(selectedConfigPath);
         RefreshDomainRows();
         RefreshMacSoftwareRows();
+
+        suppressRestoreOnExitChanged = true;
+        try
+        {
+            RestoreOnExitCheckBox.IsChecked = appState.RestoreNormalRoutingOnExit;
+        }
+        finally
+        {
+            suppressRestoreOnExitChanged = false;
+        }
+    }
+
+    private void OnRestoreOnExitChanged(object? sender, RoutedEventArgs e)
+    {
+        if (suppressRestoreOnExitChanged)
+        {
+            return;
+        }
+
+        appState = appState with { RestoreNormalRoutingOnExit = RestoreOnExitCheckBox.IsChecked == true };
+        SaveState();
     }
 
     private void RefreshTunnelConfigRows(string? preferredPath = null)
@@ -921,8 +975,97 @@ public partial class MainWindow : Window
         stateStore.Save(appState);
     }
 
+    private void AdoptLeftoverTunnel()
+    {
+        // A previous session may have left the split tunnel running (the app
+        // used to forget it on restart). Re-adopt it so status, route restore,
+        // and Disable Tunnel keep working against the right utun.
+        var adopted = MacTunnelNameResolver.TryGetInterfaceForTunnel(MacSplitTunnelConfigService.SplitTunnelName);
+        if (adopted is not null)
+        {
+            activeTunnelName = adopted;
+            Log($"adopted running split tunnel {MacSplitTunnelConfigService.SplitTunnelName} on {adopted} from a previous session");
+        }
+
+        ReconcileRawTunnel();
+    }
+
+    private void ReconcileRawTunnel()
+    {
+        var rawTunnelName = appState.ActiveRawTunnelName;
+        if (string.IsNullOrWhiteSpace(rawTunnelName))
+        {
+            return;
+        }
+
+        var rawInterface = MacTunnelNameResolver.TryGetInterfaceForTunnel(rawTunnelName);
+        if (rawInterface is not null)
+        {
+            activeTunnelName = rawInterface;
+            Log($"adopted running full tunnel {rawTunnelName} on {rawInterface} from a previous session");
+            return;
+        }
+
+        // The full tunnel died without wg-quick down (crash/reboot), so its
+        // DNS override was never rolled back. Repair it now or the user may
+        // have no working DNS at all.
+        appState = appState with { ActiveRawTunnelName = null };
+        SaveState();
+        Log($"full tunnel {rawTunnelName} from a previous session is gone; checking for leftover DNS override...");
+        _ = RepairDnsAfterStaleRawTunnelAsync();
+    }
+
+    private async Task RepairDnsAfterStaleRawTunnelAsync()
+    {
+        await RunGuardedAsync("repair DNS", async ct =>
+        {
+            var dnsServices = await DiscoverTunnelDnsServicesAsync(ct);
+            if (dnsServices.Count == 0)
+            {
+                Log("system DNS is clean; nothing to repair.");
+                return;
+            }
+
+            await MacDnsRepairService.ResetServicesAsync(dnsServices, ct);
+            Log($"restored DHCP DNS on: {string.Join(", ", dnsServices)}");
+        });
+    }
+
+    private async Task<IReadOnlyList<string>> DiscoverTunnelDnsServicesAsync(CancellationToken ct)
+    {
+        var configPath = selectedConfigPath ?? appState.SelectedTunnelConfigPath;
+        if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath))
+        {
+            return [];
+        }
+
+        string configText;
+        try
+        {
+            configText = await File.ReadAllTextAsync(configPath, ct);
+        }
+        catch
+        {
+            return [];
+        }
+
+        var tunnelDns = MacSplitTunnelConfigService.ExtractDnsServers(configText);
+        return await MacDnsRepairService.DiscoverServicesToResetAsync(tunnelDns, ct);
+    }
+
     private void RefreshTunnelStatus()
     {
+        // Prefer our own split tunnel's mapping over the generic detector so the
+        // status reflects the tunnel this app manages.
+        var splitInterface = MacTunnelNameResolver.TryGetInterfaceForTunnel(MacSplitTunnelConfigService.SplitTunnelName);
+        if (splitInterface is not null)
+        {
+            activeTunnelName = splitInterface;
+            TunnelStatusText.Text = $"connected via {splitInterface}";
+            TunnelStatusText.Foreground = Brushes.SeaGreen;
+            return;
+        }
+
         if (detector.TryGetActiveInterface(out var iface))
         {
             activeTunnelName = iface;
@@ -934,6 +1077,78 @@ public partial class MainWindow : Window
             activeTunnelName = null;
             TunnelStatusText.Text = "not connected";
             TunnelStatusText.Foreground = Brushes.Gray;
+        }
+    }
+
+    protected override void OnClosing(WindowClosingEventArgs e)
+    {
+        monitorTimer.Stop();
+        monitorRefreshCts?.Cancel();
+
+        if (allowCloseWithoutRestore || !appState.RestoreNormalRoutingOnExit)
+        {
+            base.OnClosing(e);
+            return;
+        }
+
+        // Cancel this close (also cancels a Cmd+Q shutdown), run the cleanup
+        // once, then re-close for real. Mirrors the Windows app's OnWindowClosing.
+        e.Cancel = true;
+        base.OnClosing(e);
+        _ = CleanupThenCloseAsync();
+    }
+
+    private async Task CleanupThenCloseAsync()
+    {
+        if (exitCleanupInProgress)
+        {
+            return;
+        }
+
+        exitCleanupInProgress = true;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+
+            // Only include work that is actually pending so a clean system
+            // quits without any admin prompt.
+            var splitConfigPath = Path.Combine(GetDataDirectory(), MacSplitTunnelConfigService.SplitTunnelConfigFileName);
+            var splitTunnelUp = MacTunnelNameResolver.TryGetInterfaceForTunnel(MacSplitTunnelConfigService.SplitTunnelName) is not null;
+            var rawTunnelName = appState.ActiveRawTunnelName;
+            var rawTunnelUp = !string.IsNullOrWhiteSpace(rawTunnelName)
+                && MacTunnelNameResolver.TryGetInterfaceForTunnel(rawTunnelName!) is not null;
+            var managedIps = appState.ManagedRouteSnapshot
+                .Select(entry => entry.IpAddress)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var dnsServices = await DiscoverTunnelDnsServicesAsync(cts.Token);
+
+            Log("restoring normal routing before quitting...");
+            var cleaned = await MacExitCleanupService.RunAsync(
+                splitTunnelUp && File.Exists(splitConfigPath) ? splitConfigPath : null,
+                rawTunnelUp ? rawTunnelName : null,
+                managedIps,
+                dnsServices,
+                "WireGuard split tunnel is restoring normal routing before quitting",
+                cts.Token);
+
+            if (cleaned)
+            {
+                appState = appState with { ManagedRouteSnapshot = [], ActiveRawTunnelName = null };
+                SaveState();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Never trap the user in the app because cleanup (or the admin
+            // prompt) failed — log and close anyway.
+            Log($"restore on exit failed: {MacErrorPresenter.ToFriendly(ex.Message)}");
+            Debug.WriteLine(ex);
+        }
+        finally
+        {
+            allowCloseWithoutRestore = true;
+            Dispatcher.UIThread.Post(Close);
         }
     }
 
@@ -953,26 +1168,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static string ToFriendlyMacError(string message)
-    {
-        if (message.Contains("/opt/homebrew/bin/bash: No such file or directory", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Homebrew Bash is missing. Run: brew install bash";
-        }
-
-        if (message.Contains("wg-quick not found", StringComparison.OrdinalIgnoreCase))
-        {
-            return "WireGuard tools are missing. Run: brew install wireguard-tools bash";
-        }
-
-        if (message.Contains("Operation not permitted", StringComparison.OrdinalIgnoreCase)
-            && message.Contains(".conf", StringComparison.OrdinalIgnoreCase))
-        {
-            return "macOS blocked that config path. Copy the .conf file to /opt/homebrew/etc/wireguard, refresh configs, and choose it there.";
-        }
-
-        return message;
-    }
+    private static string ToFriendlyMacError(string message) => MacErrorPresenter.ToFriendly(message);
 
     private void Log(string message)
     {

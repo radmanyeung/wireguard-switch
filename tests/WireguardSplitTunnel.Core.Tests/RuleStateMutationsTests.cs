@@ -75,4 +75,25 @@ public sealed class RuleStateMutationsTests
         state.LastKnownResolvedIps["example.com"].Should().Equal("203.0.113.1");
         state.ManagedRouteSnapshot.Should().ContainSingle();
     }
+
+    [Fact]
+    public void Clone_PreservesMacFieldsAndActiveRawTunnelName()
+    {
+        var state = new AppState([], new Dictionary<string, List<string>>(), [])
+            with
+            {
+                MacTunnelProfiles = [new MacTunnelProfile("p1", "US", "/etc/wireguard/US.conf")],
+                MacSoftwareRules = [new MacSoftwareRule("com.example.app", "Example", null, "p1")],
+                MacDomainProfileAssignments = [new MacDomainProfileAssignment("example.com", "p1")],
+                ActiveRawTunnelName = "SG"
+            };
+
+        var clone = RuleStateMutations.Clone(state);
+
+        clone.MacTunnelProfiles.Should().BeEquivalentTo(state.MacTunnelProfiles);
+        clone.MacSoftwareRules.Should().BeEquivalentTo(state.MacSoftwareRules);
+        clone.MacDomainProfileAssignments.Should().BeEquivalentTo(state.MacDomainProfileAssignments);
+        clone.ActiveRawTunnelName.Should().Be("SG");
+        clone.MacTunnelProfiles.Should().NotBeSameAs(state.MacTunnelProfiles);
+    }
 }

@@ -58,6 +58,9 @@
                 <Button Name="DisableTunnelButton" Content="Disable Tunnel" Click="OnDisableTunnelClick" MinWidth="130"/>
                 <Button Content="Refresh Status" Click="OnRefreshStatusClick" MinWidth="120"/>
               </StackPanel>
+              <CheckBox Name="RestoreOnExitCheckBox"
+                        Content="Restore normal routing and DNS when quitting"
+                        IsCheckedChanged="OnRestoreOnExitChanged"/>
             </StackPanel>
           </Border>
 
