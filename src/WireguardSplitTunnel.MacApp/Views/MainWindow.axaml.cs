@@ -45,7 +45,7 @@ public partial class MainWindow : Window
         var dataDirectory = GetDataDirectory();
         stateStore = new StateStore(Path.Combine(dataDirectory, "state.json"));
         appliedStateStore = new StateStore(Path.Combine(dataDirectory, "applied-state.json"));
-        appState = stateStore.Load();
+        appState = PrimaryAppStateLoader.Load(stateStore);
 
         LoadStateToUi();
         RefreshTunnelStatus();

@@ -90,7 +90,7 @@ public partial class MainWindow : Window
         stateStore = new StateStore(Path.Combine(dataDirectory, "state.json"));
         appliedStateStore = new StateStore(Path.Combine(dataDirectory, "applied-state.json"));
         tempListStore = new StateStore(Path.Combine(dataDirectory, "temp-lists.json"));
-        state = stateStore.Load();
+        state = PrimaryAppStateLoader.Load(stateStore);
 
         Loaded += OnLoaded;
         Closing += OnWindowClosing;
