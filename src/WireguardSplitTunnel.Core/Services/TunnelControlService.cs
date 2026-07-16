@@ -166,6 +166,9 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         // WireGuard app connected, and Start AI VPN should not break that tunnel.
         script.AppendLine($"{wgQuick} down {ShellQuote(configPath)} >/dev/null 2>&1 || true");
         script.AppendLine($"{wgQuick} up {ShellQuote(configPath)}");
+        var tunnelName = WireguardConfigCatalog.GetTunnelName(configPath);
+        var nameFile = MacTunnelNameResolver.GetNameFilePath(tunnelName);
+        script.AppendLine($"/bin/chmod 0644 {ShellQuote(nameFile)}");
         return script.ToString();
     }
 

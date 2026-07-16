@@ -38,4 +38,25 @@ public sealed class MacTunnelControlServiceTests
         script.IndexOf("down \"/opt/homebrew/etc/wireguard/SG.conf\"", StringComparison.Ordinal)
             .Should().BeLessThan(script.IndexOf("up \"/opt/homebrew/etc/wireguard/SG.conf\"", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void BuildInstallAndStartScript_MakesOnlySelectedMappingReadableAfterUp()
+    {
+        var script = MacTunnelControlService.BuildInstallAndStartScript(
+            "/opt/homebrew/bin/wg-quick",
+            "/opt/homebrew/etc/wireguard/SG $prod.conf",
+            ["HK", "JP"]);
+
+        const string up =
+            "/opt/homebrew/bin/wg-quick up \"/opt/homebrew/etc/wireguard/SG \\$prod.conf\"";
+        const string chmod =
+            "/bin/chmod 0644 \"/var/run/wireguard/SG \\$prod.name\"";
+
+        script.Should().Contain(chmod + Environment.NewLine);
+        script.Should().NotContain(chmod + " || true");
+        script.IndexOf(up, StringComparison.Ordinal)
+            .Should().BeLessThan(script.IndexOf(chmod, StringComparison.Ordinal));
+        script.Should().NotContain("/var/run/wireguard/HK.name");
+        script.Should().NotContain("/var/run/wireguard/JP.name");
+    }
 }

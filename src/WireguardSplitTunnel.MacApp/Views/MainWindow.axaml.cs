@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Collections;
 using Avalonia.Controls;
@@ -11,6 +12,7 @@ using WireguardSplitTunnel.Core.Services;
 
 namespace WireguardSplitTunnel.MacApp.Views;
 
+[SupportedOSPlatform("macos")]
 public partial class MainWindow : Window
 {
     private readonly MainWindowState viewState = new();
@@ -1001,6 +1003,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        var mappingPresence =
+            MacTunnelNameResolver.GetExactMappingPresence(rawTunnelName);
+        if (MacTunnelLifecyclePlanner.ShouldPreserveUnresolvedRawTunnel(
+                mappingPresence))
+        {
+            Log($"full tunnel {rawTunnelName} ownership could not be confirmed ({mappingPresence}); keeping saved tunnel state and skipping DNS repair.");
+            return;
+        }
+
         // The full tunnel died without wg-quick down (crash/reboot), so its
         // DNS override was never rolled back. Repair it now or the user may
         // have no working DNS at all.
@@ -1098,11 +1109,14 @@ public partial class MainWindow : Window
             // Only include work that is actually pending so a clean system
             // quits without any admin prompt.
             var splitConfigPath = Path.Combine(GetDataDirectory(), MacSplitTunnelConfigService.SplitTunnelConfigFileName);
-            var splitTunnelUp =
-                MacManagedTunnelInterfaceResolver.TryGetSplitTunnelInterface() is not null;
+            var splitMappingPresence = MacTunnelNameResolver.GetExactMappingPresence(
+                MacSplitTunnelConfigService.SplitTunnelName);
+            var splitTunnelPossiblyUp =
+                MacTunnelLifecyclePlanner.ShouldAttemptCleanup(splitMappingPresence);
             var rawTunnelName = appState.ActiveRawTunnelName;
-            var rawTunnelUp = !string.IsNullOrWhiteSpace(rawTunnelName)
-                && MacTunnelNameResolver.TryGetExactInterfaceForTunnel(rawTunnelName!) is not null;
+            var rawTunnelPossiblyUp = !string.IsNullOrWhiteSpace(rawTunnelName)
+                && MacTunnelLifecyclePlanner.ShouldAttemptCleanup(
+                    MacTunnelNameResolver.GetExactMappingPresence(rawTunnelName!));
             var managedIps = appState.ManagedRouteSnapshot
                 .Select(entry => entry.IpAddress)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1111,8 +1125,8 @@ public partial class MainWindow : Window
 
             Log("restoring normal routing before quitting...");
             var cleaned = await MacExitCleanupService.RunAsync(
-                splitTunnelUp && File.Exists(splitConfigPath) ? splitConfigPath : null,
-                rawTunnelUp ? rawTunnelName : null,
+                splitTunnelPossiblyUp && File.Exists(splitConfigPath) ? splitConfigPath : null,
+                rawTunnelPossiblyUp ? rawTunnelName : null,
                 managedIps,
                 dnsServices,
                 "WireGuard split tunnel is restoring normal routing before quitting",

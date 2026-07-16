@@ -54,4 +54,41 @@ public sealed class MacTunnelNameResolverTests
             ["/var/run/wireguard/other.sock", "/var/run/wireguard/utun9.sock"])
             .Should().Be("utun9");
     }
+
+    [Fact]
+    public void GetExactMappingPresence_ExistingEntry_ReturnsPresentForExactName()
+    {
+        string? inspectedPath = null;
+
+        var result = MacTunnelNameResolver.GetExactMappingPresence(
+            "SG",
+            path =>
+            {
+                inspectedPath = path;
+                return FileAttributes.Normal;
+            });
+
+        result.Should().Be(MacTunnelMappingPresence.Present);
+        inspectedPath.Should().Be("/var/run/wireguard/SG.name");
+    }
+
+    [Fact]
+    public void GetExactMappingPresence_MissingEntry_ReturnsAbsent()
+    {
+        var result = MacTunnelNameResolver.GetExactMappingPresence(
+            "SG",
+            _ => throw new FileNotFoundException());
+
+        result.Should().Be(MacTunnelMappingPresence.Absent);
+    }
+
+    [Fact]
+    public void GetExactMappingPresence_UnreadableMetadata_ReturnsUnknown()
+    {
+        var result = MacTunnelNameResolver.GetExactMappingPresence(
+            "SG",
+            _ => throw new UnauthorizedAccessException());
+
+        result.Should().Be(MacTunnelMappingPresence.Unknown);
+    }
 }

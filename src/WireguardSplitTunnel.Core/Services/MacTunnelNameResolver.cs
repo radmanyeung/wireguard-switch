@@ -3,6 +3,13 @@ using System.Runtime.Versioning;
 
 namespace WireguardSplitTunnel.Core.Services;
 
+public enum MacTunnelMappingPresence
+{
+    Absent,
+    Present,
+    Unknown
+}
+
 /// <summary>
 /// Maps a wg-quick tunnel name (e.g. "wgst-split") to its live utun device by
 /// reading /var/run/wireguard/&lt;name&gt;.name. Lets the app re-adopt a tunnel
@@ -44,6 +51,35 @@ public static class MacTunnelNameResolver
             () => Directory.EnumerateFiles(WireguardRunDirectory, "*.sock"),
             IsInterfaceUp);
 
+    [SupportedOSPlatform("macos")]
+    public static MacTunnelMappingPresence GetExactMappingPresence(string tunnelName) =>
+        GetExactMappingPresence(tunnelName, File.GetAttributes);
+
+    internal static MacTunnelMappingPresence GetExactMappingPresence(
+        string tunnelName,
+        Func<string, FileAttributes> getAttributes)
+    {
+        ArgumentNullException.ThrowIfNull(getAttributes);
+
+        try
+        {
+            _ = getAttributes(GetNameFilePath(tunnelName));
+            return MacTunnelMappingPresence.Present;
+        }
+        catch (FileNotFoundException)
+        {
+            return MacTunnelMappingPresence.Absent;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return MacTunnelMappingPresence.Absent;
+        }
+        catch
+        {
+            return MacTunnelMappingPresence.Unknown;
+        }
+    }
+
     internal static string? TryGetExactInterfaceForTunnel(
         string tunnelName,
         Func<string, bool> nameFileExists,
@@ -66,7 +102,7 @@ public static class MacTunnelNameResolver
         Func<IEnumerable<string>> enumerateSocketFiles,
         Func<string, bool> isInterfaceUp)
     {
-        var nameFile = Path.Combine(WireguardRunDirectory, tunnelName + ".name");
+        var nameFile = GetNameFilePath(tunnelName);
         try
         {
             if (!nameFileExists(nameFile))
@@ -95,6 +131,9 @@ public static class MacTunnelNameResolver
             return null;
         }
     }
+
+    internal static string GetNameFilePath(string tunnelName) =>
+        Path.Combine(WireguardRunDirectory, tunnelName + ".name");
 
     internal static string? ChooseUnambiguousSocketInterface(IEnumerable<string> socketFiles)
     {
