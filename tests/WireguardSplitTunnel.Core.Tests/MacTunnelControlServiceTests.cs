@@ -59,4 +59,29 @@ public sealed class MacTunnelControlServiceTests
         script.Should().NotContain("/var/run/wireguard/HK.name");
         script.Should().NotContain("/var/run/wireguard/JP.name");
     }
+
+    [Fact]
+    public void BuildStopScript_MaliciousBareTunnelName_RejectsBeforeElevation()
+    {
+        var act = () => MacTunnelControlService.BuildStopScript(
+            "/opt/homebrew/bin/wg-quick",
+            "x\"; /usr/bin/touch /tmp/pwned; #");
+
+        act.Should().Throw<ArgumentException>()
+            .WithMessage("*valid WireGuard interface name*");
+    }
+
+    [Fact]
+    public void BuildStopScript_SelectedConfigPathWithShellMetacharacters_QuotesWholePath()
+    {
+        const string configPath = "/tmp/x\"; /usr/bin/touch /tmp/pwned; #.conf";
+
+        var script = MacTunnelControlService.BuildStopScript(
+            "/opt/homebrew/bin/wg-quick",
+            configPath);
+
+        script.Should().Be(
+            "\"/opt/homebrew/bin/wg-quick\" down \"/tmp/x\\\"; /usr/bin/touch /tmp/pwned; #.conf\"");
+        script.Split('\n', StringSplitOptions.RemoveEmptyEntries).Should().ContainSingle();
+    }
 }

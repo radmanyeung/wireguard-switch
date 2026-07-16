@@ -126,13 +126,10 @@ internal sealed class MacTunnelControlService : ITunnelControlService
 
     public Task StopAndUninstallAsync(string tunnelName, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(tunnelName))
-        {
-            throw new ArgumentException("Tunnel name is required.", nameof(tunnelName));
-        }
+        ValidateStopTarget(tunnelName);
 
         var wgQuick = ResolveWgQuick();
-        var script = $"{wgQuick} down \"{tunnelName}\"";
+        var script = BuildStopScript(wgQuick, tunnelName);
         return RunBatchAsync(script, "WireGuard split tunnel needs to stop the tunnel", cancellationToken);
     }
 
@@ -147,6 +144,15 @@ internal sealed class MacTunnelControlService : ITunnelControlService
     }
 
     internal static string? TryResolveWgQuick() => WgQuickCandidates.FirstOrDefault(File.Exists);
+
+    internal static string BuildStopScript(string wgQuick, string target)
+        => MacTunnelStopScript.Build(wgQuick, target);
+
+    internal static bool IsValidTunnelName(string value) =>
+        MacTunnelStopScript.IsValidTunnelName(value);
+
+    private static void ValidateStopTarget(string target)
+        => MacTunnelStopScript.ValidateTarget(target);
 
     private static string ResolveWgQuick() =>
         TryResolveWgQuick()
@@ -209,4 +215,36 @@ internal sealed class MacTunnelControlService : ITunnelControlService
     }
 
     private static string ShellQuote(string value) => ShellQuoting.Quote(value);
+}
+
+internal static class MacTunnelStopScript
+{
+    internal static string Build(string wgQuick, string target)
+    {
+        ValidateTarget(target);
+        return $"{ShellQuoting.Quote(wgQuick)} down {ShellQuoting.Quote(target)}";
+    }
+
+    internal static bool IsValidTunnelName(string value) =>
+        value.Length is > 0 and <= 15
+        && value.All(character =>
+            char.IsAsciiLetterOrDigit(character)
+            || character is '_' or '=' or '+' or '.' or '-');
+
+    internal static void ValidateTarget(string target)
+    {
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            throw new ArgumentException("Tunnel target is required.", nameof(target));
+        }
+
+        var isExplicitConfigPath = Path.IsPathFullyQualified(target)
+            && string.Equals(Path.GetExtension(target), ".conf", StringComparison.OrdinalIgnoreCase);
+        if (!isExplicitConfigPath && !IsValidTunnelName(target))
+        {
+            throw new ArgumentException(
+                "A bare tunnel target must be a valid WireGuard interface name.",
+                nameof(target));
+        }
+    }
 }

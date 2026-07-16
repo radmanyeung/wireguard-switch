@@ -120,6 +120,78 @@ public sealed class StateStoreTests
     }
 
     [Fact]
+    public void SaveAndLoad_RoundTripsActiveSplitTunnelCleanupDebt()
+    {
+        var path = CreateTestPath();
+        var store = new StateStore(path);
+        var original = new AppState([], [], []) with
+        {
+            ActiveSplitTunnelConfigPath = "/data/wgst-split.conf"
+        };
+
+        store.Save(original);
+
+        store.Load().ActiveSplitTunnelConfigPath.Should().Be("/data/wgst-split.conf");
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_OldStateFileWithoutSplitCleanupDebt_DefaultsToNull()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, """{ "DomainRules": [] }""");
+
+        new StateStore(path).Load().ActiveSplitTunnelConfigPath.Should().BeNull();
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SaveAndLoad_RoundTripsRawDnsCleanupDebtWithoutConfigText()
+    {
+        var path = CreateTestPath();
+        var store = new StateStore(path);
+        var debt = new MacRawTunnelDnsCleanupDebt(
+            "SG",
+            "/opt/homebrew/etc/wireguard/SG.conf",
+            ["103.86.96.100"],
+            ["tailnet.ts.net"],
+            [new MacDnsServiceSnapshot("Wi-Fi", ["1.1.1.1"], ["home.arpa"])]);
+        var original = new AppState([], [], []) with { RawTunnelDnsCleanupDebt = debt };
+
+        store.Save(original);
+
+        store.Load().RawTunnelDnsCleanupDebt.Should().BeEquivalentTo(debt);
+        File.ReadAllText(path).Should().NotContain("PrivateKey");
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_OldStateFileWithoutRawDnsCleanupDebt_DefaultsToNull()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, """{ "DomainRules": [] }""");
+
+        new StateStore(path).Load().RawTunnelDnsCleanupDebt.Should().BeNull();
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_ThrowsInvalidDataException_ForCorruptNonEmptyJson()
     {
         var path = CreateTestPath();

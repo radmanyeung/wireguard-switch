@@ -80,6 +80,22 @@ public sealed class StateStore
             ? state.SoftwareGlobalDefaultMode
             : DomainRouteMode.BypassWireGuard;
 
+        var rawDnsDebt = state.RawTunnelDnsCleanupDebt is { } debt
+            ? debt with
+            {
+                TunnelDnsServers = debt.TunnelDnsServers ?? [],
+                TunnelSearchDomains = debt.TunnelSearchDomains ?? [],
+                Services = (debt.Services ?? [])
+                    .Where(service => service is not null)
+                    .Select(service => service with
+                    {
+                        DnsServers = service.DnsServers ?? [],
+                        SearchDomains = service.SearchDomains ?? []
+                    })
+                    .ToList()
+            }
+            : null;
+
         return state with
         {
             DomainRules = state.DomainRules ?? [],
@@ -92,7 +108,8 @@ public sealed class StateStore
             MacDomainProfileAssignments = state.MacDomainProfileAssignments ?? [],
             DomainGlobalDefaultMode = domainMode,
             SoftwareGlobalDefaultMode = softwareMode,
-            RestoreNormalRoutingOnExit = state.RestoreNormalRoutingOnExit
+            RestoreNormalRoutingOnExit = state.RestoreNormalRoutingOnExit,
+            RawTunnelDnsCleanupDebt = rawDnsDebt
         };
     }
 

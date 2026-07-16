@@ -1,31 +1,11 @@
 using FluentAssertions;
+using WireguardSplitTunnel.Core.Models;
 using WireguardSplitTunnel.Core.Services;
 
 namespace WireguardSplitTunnel.Core.Tests;
 
 public sealed class MacDnsRepairServiceTests
 {
-    [Fact]
-    public void ParseNetworkServices_SkipsHeaderAndDisabledServices()
-    {
-        var output = """
-            An asterisk (*) denotes that a network service is disabled.
-            Thunderbolt Bridge
-            Wi-Fi
-            *Disabled VPN
-            AT
-            """;
-
-        MacDnsRepairService.ParseNetworkServices(output)
-            .Should().Equal("Thunderbolt Bridge", "Wi-Fi", "AT");
-    }
-
-    [Fact]
-    public void ParseNetworkServices_EmptyOutput_ReturnsEmpty()
-    {
-        MacDnsRepairService.ParseNetworkServices(string.Empty).Should().BeEmpty();
-    }
-
     [Fact]
     public void ParseDnsServers_IpPerLine_ReturnsIps()
     {
@@ -41,42 +21,102 @@ public sealed class MacDnsRepairServiceTests
     }
 
     [Fact]
-    public void PlanServicesToReset_ReturnsOnlyServicesUsingTunnelDns()
+    public void ParseSearchDomains_ExactDomainLines_ReturnsDomains()
     {
-        var current = new Dictionary<string, IReadOnlyList<string>>
+        MacDnsRepairService.ParseSearchDomains("tailnet.ts.net\ncorp.example\n")
+            .Should().Equal("tailnet.ts.net", "corp.example");
+    }
+
+    [Fact]
+    public void CreateCleanupDebt_ConfigWithPrivateKey_PersistsOnlyDnsAndConfigProvenance()
+    {
+        const string config = """
+            [Interface]
+            PrivateKey = do-not-persist-this-key
+            DNS = 103.86.96.100, tailnet.ts.net
+            """;
+        var before = new[]
         {
-            ["Wi-Fi"] = ["103.86.96.100", "103.86.99.100"],
-            ["Thunderbolt Bridge"] = [],
-            ["AT"] = ["1.1.1.1"]
+            new MacDnsServiceSnapshot("Wi-Fi", ["1.1.1.1"], ["home.arpa"])
         };
 
-        MacDnsRepairService.PlanServicesToReset(current, ["103.86.96.100", "103.86.99.100"])
-            .Should().Equal("Wi-Fi");
+        var debt = MacDnsRepairService.CreateCleanupDebt(
+            "SG",
+            "/opt/homebrew/etc/wireguard/SG.conf",
+            config,
+            before);
+
+        debt.Should().NotBeNull();
+        debt!.TunnelName.Should().Be("SG");
+        debt.ConfigPath.Should().Be("/opt/homebrew/etc/wireguard/SG.conf");
+        debt.TunnelDnsServers.Should().Equal("103.86.96.100");
+        debt.TunnelSearchDomains.Should().Equal("tailnet.ts.net");
+        debt.ToString().Should().NotContain("do-not-persist-this-key");
     }
 
     [Fact]
-    public void PlanServicesToReset_NoTunnelDns_ReturnsEmpty()
+    public void PlanSnapshotRestore_PreExistingMatchingDns_DoesNotScheduleRestore()
     {
-        var current = new Dictionary<string, IReadOnlyList<string>>
+        var snapshot = new MacDnsServiceSnapshot(
+            "Wi-Fi",
+            ["103.86.96.100"],
+            ["tailnet.ts.net"]);
+        var debt = CreateDebt(snapshot);
+        var current = new Dictionary<string, MacDnsServiceSnapshot>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Wi-Fi"] = ["103.86.96.100"]
+            ["Wi-Fi"] = snapshot
         };
 
-        MacDnsRepairService.PlanServicesToReset(current, []).Should().BeEmpty();
+        var plan = MacDnsRepairService.PlanSnapshotRestore(debt, current);
+
+        plan.ServicesToRestore.Should().BeEmpty();
+        plan.ServicesResolvedWithoutRestore.Should().Equal("Wi-Fi");
     }
 
     [Fact]
-    public void BuildResetScript_EmitsOneNetworksetupLinePerService()
+    public void PlanSnapshotRestore_SelectedConfigMismatch_UsesPersistedRawConfigProvenance()
     {
-        var script = MacDnsRepairService.BuildResetScript(["Wi-Fi", "My Service"]);
+        var before = new MacDnsServiceSnapshot("Wi-Fi", ["1.1.1.1"], ["home.arpa"]);
+        var debt = CreateDebt(before);
+        var current = new Dictionary<string, MacDnsServiceSnapshot>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Wi-Fi"] = new("Wi-Fi", ["103.86.96.100"], ["tailnet.ts.net"])
+        };
 
-        script.Should().Contain("/usr/sbin/networksetup -setdnsservers \"Wi-Fi\" Empty");
-        script.Should().Contain("/usr/sbin/networksetup -setdnsservers \"My Service\" Empty");
+        var plan = MacDnsRepairService.PlanSnapshotRestore(debt, current);
+
+        plan.TunnelName.Should().Be("SG");
+        plan.ConfigPath.Should().Be("/opt/homebrew/etc/wireguard/SG.conf");
+        plan.ServicesToRestore.Should().Equal(before);
     }
 
     [Fact]
-    public void BuildResetScript_NoServices_ReturnsEmpty()
+    public void PlanSnapshotRestore_SplitOnlyState_NeverSchedulesDnsRepair()
     {
-        MacDnsRepairService.BuildResetScript([]).Should().BeEmpty();
+        MacDnsRepairService.PlanSnapshotRestore(null, null)
+            .ServicesToRestore.Should().BeEmpty();
     }
+
+    [Fact]
+    public void PlanSnapshotRestore_CurrentMagicDnsOwnedByAnotherVpn_DoesNotOverwriteIt()
+    {
+        var before = new MacDnsServiceSnapshot("Wi-Fi", ["1.1.1.1"], ["home.arpa"]);
+        var current = new Dictionary<string, MacDnsServiceSnapshot>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Wi-Fi"] = new("Wi-Fi", ["100.100.100.100"], ["tail-scale.ts.net"])
+        };
+
+        var plan = MacDnsRepairService.PlanSnapshotRestore(CreateDebt(before), current);
+
+        plan.ServicesToRestore.Should().BeEmpty();
+        plan.ServicesResolvedWithoutRestore.Should().Equal("Wi-Fi");
+    }
+
+    private static MacRawTunnelDnsCleanupDebt CreateDebt(MacDnsServiceSnapshot snapshot) =>
+        new(
+            "SG",
+            "/opt/homebrew/etc/wireguard/SG.conf",
+            ["103.86.96.100"],
+            ["tailnet.ts.net"],
+            [snapshot]);
 }

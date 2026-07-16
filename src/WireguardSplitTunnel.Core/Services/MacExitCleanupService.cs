@@ -1,77 +1,221 @@
+using System.Net;
 using System.Runtime.Versioning;
 using System.Text;
+using WireguardSplitTunnel.Core.Models;
 using WireguardSplitTunnel.Core.Platform;
 
 namespace WireguardSplitTunnel.Core.Services;
 
+public sealed record MacCleanupRequest
+{
+    public string? SplitConfigPath { get; init; }
+    public string? RawTunnelName { get; init; }
+    public IReadOnlyList<string> AdditionalTunnelTargets { get; init; } = [];
+    public IReadOnlyList<string> ManagedIpsToRemove { get; init; } = [];
+    public MacDnsRestorePlan DnsRestorePlan { get; init; } = new();
+}
+
+public sealed record MacCleanupResult
+{
+    public bool Prompted { get; init; }
+    public bool Cancelled { get; init; }
+    public bool SplitTunnelStopped { get; init; }
+    public bool RawTunnelStopped { get; init; }
+    public IReadOnlyList<string> AdditionalTunnelTargetsStopped { get; init; } = [];
+    public IReadOnlyList<string> RemovedManagedIps { get; init; } = [];
+    public IReadOnlyList<string> RestoredDnsServices { get; init; } = [];
+    public bool BatchCompleted { get; init; } = true;
+}
+
+internal enum MacCleanupOperationKind
+{
+    SplitTunnel,
+    RawTunnel,
+    AdditionalTunnel,
+    ManagedRoute,
+    DnsService
+}
+
+internal sealed record MacCleanupOperation(
+    int Id,
+    MacCleanupOperationKind Kind,
+    string Target)
+{
+    internal string SuccessMarker => $"__WGST_CLEANUP_OK_{Id}__";
+}
+
+internal sealed record MacCleanupBatch(
+    string Script,
+    IReadOnlyList<MacCleanupOperation> Operations);
+
 /// <summary>
-/// Tears down everything this app may have changed on the system — tunnels,
-/// managed host routes, DNS overrides — in a single elevated script so the
-/// user sees at most one admin prompt.
+/// Executes app-owned macOS cleanup in one elevated batch while reporting each
+/// exact component separately. Failed or unavailable commands never look like
+/// successful cleanup to the state reducer.
 /// </summary>
 public static class MacExitCleanupService
 {
-    internal static string BuildCleanupScript(
+    internal static MacCleanupBatch BuildCleanupBatch(
         string? wgQuickPath,
-        string? splitConfigPath,
-        string? rawTunnelName,
-        IReadOnlyList<string> managedIpsToRemove,
-        IReadOnlyList<string> dnsResetServices)
+        MacCleanupRequest request)
     {
-        var script = new StringBuilder();
+        ArgumentNullException.ThrowIfNull(request);
 
+        var commands = new List<(MacCleanupOperationKind Kind, string Target, string Command)>();
         if (!string.IsNullOrWhiteSpace(wgQuickPath))
         {
-            foreach (var target in new[] { splitConfigPath, rawTunnelName })
+            AddTunnelCommand(MacCleanupOperationKind.SplitTunnel, request.SplitConfigPath);
+            AddTunnelCommand(MacCleanupOperationKind.RawTunnel, request.RawTunnelName);
+            foreach (var target in request.AdditionalTunnelTargets
+                         .Where(target => !string.IsNullOrWhiteSpace(target))
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                if (!string.IsNullOrWhiteSpace(target))
-                {
-                    script.AppendLine($"{wgQuickPath} down {ShellQuoting.Quote(target)} >/dev/null 2>&1 || true");
-                }
+                AddTunnelCommand(MacCleanupOperationKind.AdditionalTunnel, target);
             }
         }
 
-        foreach (var ip in managedIpsToRemove.Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var ip in request.ManagedIpsToRemove
+                     .Where(ip => !string.IsNullOrWhiteSpace(ip))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            script.AppendLine($"/sbin/route -n delete -host {ip} >/dev/null 2>&1 || true");
+            if (IPAddress.TryParse(ip, out _))
+            {
+                commands.Add((
+                    MacCleanupOperationKind.ManagedRoute,
+                    ip,
+                    $"/sbin/route -n delete -host {ShellQuoting.Quote(ip)}"));
+            }
         }
 
-        script.Append(MacDnsRepairService.BuildResetScript(dnsResetServices));
+        foreach (var snapshot in request.DnsRestorePlan.ServicesToRestore
+                     .DistinctBy(service => service.ServiceName, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(snapshot.ServiceName))
+            {
+                commands.Add((
+                    MacCleanupOperationKind.DnsService,
+                    snapshot.ServiceName,
+                    BuildDnsRestoreCommand(snapshot)));
+            }
+        }
 
-        return script.ToString();
+        var operations = new List<MacCleanupOperation>();
+        var script = new StringBuilder();
+        foreach (var command in commands)
+        {
+            var operation = new MacCleanupOperation(
+                operations.Count,
+                command.Kind,
+                command.Target);
+            operations.Add(operation);
+            script.AppendLine($"if {command.Command} >/dev/null 2>&1; then");
+            script.AppendLine($"  /usr/bin/printf '%s\\n' '{operation.SuccessMarker}'");
+            script.AppendLine("fi");
+        }
+
+        return new MacCleanupBatch(script.ToString(), operations);
+
+        void AddTunnelCommand(MacCleanupOperationKind kind, string? target)
+        {
+            if (string.IsNullOrWhiteSpace(target))
+            {
+                return;
+            }
+
+            try
+            {
+                commands.Add((
+                    kind,
+                    target,
+                    MacTunnelStopScript.Build(wgQuickPath!, target)));
+            }
+            catch (ArgumentException)
+            {
+                // Invalid persisted/bare targets are deliberately left as debt.
+                // They must never be copied into an elevated script.
+            }
+        }
     }
 
-    /// <summary>
-    /// Runs the batched cleanup. Returns false without prompting when there is
-    /// nothing to clean up.
-    /// </summary>
+    internal static MacCleanupResult ParseCleanupResult(
+        MacCleanupRequest request,
+        MacCleanupBatch batch,
+        MacShellResult shellResult)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(batch);
+
+        var successful = batch.Operations
+            .Where(operation => shellResult.Combined.Contains(
+                operation.SuccessMarker,
+                StringComparison.Ordinal))
+            .ToList();
+
+        return new MacCleanupResult
+        {
+            Prompted = batch.Script.Length > 0,
+            SplitTunnelStopped = successful.Any(operation =>
+                operation.Kind == MacCleanupOperationKind.SplitTunnel),
+            RawTunnelStopped = successful.Any(operation =>
+                operation.Kind == MacCleanupOperationKind.RawTunnel),
+            AdditionalTunnelTargetsStopped = successful
+                .Where(operation => operation.Kind == MacCleanupOperationKind.AdditionalTunnel)
+                .Select(operation => operation.Target)
+                .ToList(),
+            RemovedManagedIps = successful
+                .Where(operation => operation.Kind == MacCleanupOperationKind.ManagedRoute)
+                .Select(operation => operation.Target)
+                .ToList(),
+            RestoredDnsServices = successful
+                .Where(operation => operation.Kind == MacCleanupOperationKind.DnsService)
+                .Select(operation => operation.Target)
+                .ToList(),
+            BatchCompleted = shellResult.ExitCode == 0
+        };
+    }
+
     [SupportedOSPlatform("macos")]
-    public static async Task<bool> RunAsync(
-        string? splitConfigPath,
-        string? rawTunnelName,
-        IReadOnlyList<string> managedIpsToRemove,
-        IReadOnlyList<string> dnsResetServices,
+    public static async Task<MacCleanupResult> RunAsync(
+        MacCleanupRequest request,
         string promptReason,
         CancellationToken cancellationToken)
     {
-        var script = BuildCleanupScript(
-            MacTunnelControlService.TryResolveWgQuick(),
-            splitConfigPath,
-            rawTunnelName,
-            managedIpsToRemove,
-            dnsResetServices);
-        if (script.Length == 0)
+        var batch = BuildCleanupBatch(MacTunnelControlService.TryResolveWgQuick(), request);
+        if (batch.Script.Length == 0)
         {
-            return false;
+            return new MacCleanupResult { Prompted = false };
         }
 
-        var result = await MacAdminShell.RunAsAdminAsync(script, promptReason, cancellationToken);
-        if (result.ExitCode != 0)
+        try
         {
-            throw new InvalidOperationException(
-                $"cleanup failed (exit {result.ExitCode}): {result.Combined}");
+            var shellResult = await MacAdminShell.RunAsAdminAsync(
+                batch.Script,
+                promptReason,
+                cancellationToken);
+            return ParseCleanupResult(request, batch, shellResult);
         }
+        catch (OperationCanceledException)
+        {
+            return new MacCleanupResult
+            {
+                Prompted = true,
+                Cancelled = true,
+                BatchCompleted = false
+            };
+        }
+    }
 
-        return true;
+    private static string BuildDnsRestoreCommand(MacDnsServiceSnapshot snapshot)
+    {
+        var dnsArguments = snapshot.DnsServers.Count == 0
+            ? "Empty"
+            : string.Join(' ', snapshot.DnsServers.Select(ShellQuoting.Quote));
+        var searchArguments = snapshot.SearchDomains.Count == 0
+            ? "Empty"
+            : string.Join(' ', snapshot.SearchDomains.Select(ShellQuoting.Quote));
+        var service = ShellQuoting.Quote(snapshot.ServiceName);
+
+        return $"/usr/sbin/networksetup -setdnsservers {service} {dnsArguments} >/dev/null 2>&1"
+            + $" && /usr/sbin/networksetup -setsearchdomains {service} {searchArguments}";
     }
 }

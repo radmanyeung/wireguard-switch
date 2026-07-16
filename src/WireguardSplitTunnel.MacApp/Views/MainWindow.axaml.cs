@@ -156,6 +156,8 @@ public partial class MainWindow : Window
                     selectedConfigPath!, GetDataDirectory());
                 Log($"split tunnel config ready: {splitConfigPath} (Table=off, system DNS kept)");
                 await tunnelControl.InstallAndStartAsync(splitConfigPath, ct);
+                appState = appState with { ActiveSplitTunnelConfigPath = splitConfigPath };
+                SaveState();
                 var iface = await WaitForWireGuardInterfaceAsync(ct);
                 activeTunnelName = iface;
                 RefreshTunnelStatus();
@@ -214,11 +216,57 @@ public partial class MainWindow : Window
                         $"Another VPN currently routes all traffic ({defaultRouteInterface}). Disconnect it first, then try again.");
                 }
 
-                await tunnelControl.InstallAndStartAsync(selectedConfigPath!, ct);
-                // Remember that a full tunnel is up so a later session still
-                // knows a teardown (route + DNS restore) is owed after a crash.
-                appState = appState with { ActiveRawTunnelName = WireguardConfigCatalog.GetTunnelName(selectedConfigPath!) };
+                if (appState.RawTunnelDnsCleanupDebt is not null)
+                {
+                    throw new InvalidOperationException(
+                        "DNS cleanup from a previous full tunnel is still pending. Restore normal routes and DNS before enabling another full tunnel.");
+                }
+
+                var rawConfigPath = selectedConfigPath!;
+                var rawTunnelName = WireguardConfigCatalog.GetTunnelName(rawConfigPath);
+                var configText = await File.ReadAllTextAsync(rawConfigPath, ct);
+                MacRawTunnelDnsCleanupDebt? dnsDebt = null;
+                if (MacSplitTunnelConfigService.ExtractDnsServers(configText).Count > 0)
+                {
+                    var beforeDns = await MacDnsRepairService.CaptureSnapshotAsync(ct);
+                    dnsDebt = MacDnsRepairService.CreateCleanupDebt(
+                        rawTunnelName,
+                        rawConfigPath,
+                        configText,
+                        beforeDns);
+                }
+
+                // Persist cleanup provenance before elevation so a crash after
+                // wg-quick changes the system cannot erase the debt.
+                appState = appState with
+                {
+                    ActiveRawTunnelName = rawTunnelName,
+                    RawTunnelDnsCleanupDebt = dnsDebt
+                };
                 SaveState();
+                await tunnelControl.InstallAndStartAsync(rawConfigPath, ct);
+
+                if (dnsDebt is not null)
+                {
+                    try
+                    {
+                        var afterDns = await MacDnsRepairService.CaptureSnapshotAsync(ct);
+                        appState = appState with
+                        {
+                            RawTunnelDnsCleanupDebt = MacDnsRepairService.RefineCleanupDebtAfterStart(
+                                dnsDebt,
+                                MacDnsRepairService.ToSnapshotMap(afterDns))
+                        };
+                        SaveState();
+                    }
+                    catch (Exception ex)
+                    {
+                        // The complete pre-start snapshot is already durable;
+                        // keeping it is safer than guessing after a read failure.
+                        Log($"DNS cleanup snapshot kept for recovery: {ToFriendlyMacError(ex.Message)}");
+                    }
+                }
+
                 Log("full tunnel enabled: ALL traffic and DNS now go through the VPN until you disable it.");
                 await Task.Delay(500, ct);
                 RefreshTunnelStatus();
@@ -239,7 +287,7 @@ public partial class MainWindow : Window
             File.Exists(splitConfigPath) ? splitConfigPath : null,
             appState.ActiveRawTunnelName,
             selectedConfigPath);
-        if (targets.Count == 0)
+        if (targets.Count == 0 && appState.RawTunnelDnsCleanupDebt is null)
         {
             Log("nothing to disable.");
             return;
@@ -251,25 +299,31 @@ public partial class MainWindow : Window
         {
             await RunGuardedAsync("disable tunnel", async ct =>
             {
-                foreach (var target in targets)
+                var rawTunnelName = appState.ActiveRawTunnelName;
+                var splitTarget = targets.FirstOrDefault(target =>
+                    string.Equals(target, splitConfigPath, StringComparison.OrdinalIgnoreCase));
+                var rawTarget = targets.FirstOrDefault(target =>
+                    !string.IsNullOrWhiteSpace(rawTunnelName)
+                    && string.Equals(target, rawTunnelName, StringComparison.OrdinalIgnoreCase));
+                var additionalTargets = targets
+                    .Where(target =>
+                        !string.Equals(target, splitTarget, StringComparison.OrdinalIgnoreCase)
+                        && !string.Equals(target, rawTarget, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                var request = new MacCleanupRequest
                 {
-                    try
-                    {
-                        await tunnelControl.StopAndUninstallAsync(target, ct);
-                        Log($"stopped: {Path.GetFileName(target)}");
-                    }
-                    catch (Exception ex)
-                    {
-                        // Not every target is necessarily up; keep going.
-                        Log($"stop {Path.GetFileName(target)}: {ToFriendlyMacError(ex.Message)}");
-                    }
-                }
+                    SplitConfigPath = splitTarget,
+                    RawTunnelName = rawTarget,
+                    AdditionalTunnelTargets = additionalTargets,
+                    DnsRestorePlan = await BuildDnsRestorePlanAsync(ct)
+                };
+                var result = await MacExitCleanupService.RunAsync(
+                    request,
+                    "WireGuard split tunnel needs to stop the selected tunnels",
+                    ct);
 
-                if (!string.IsNullOrWhiteSpace(appState.ActiveRawTunnelName))
-                {
-                    appState = appState with { ActiveRawTunnelName = null };
-                    SaveState();
-                }
+                ApplyCleanupResult(request, result);
+                LogCleanupOutcome(request, result);
 
                 await Task.Delay(300, ct);
                 RefreshTunnelStatus();
@@ -375,30 +429,30 @@ public partial class MainWindow : Window
 
         await RunGuardedAsync("restore normal routes", async ct =>
         {
-            var dnsServices = await DiscoverTunnelDnsServicesAsync(ct);
-            if (managedIps.Count == 0 && dnsServices.Count == 0)
+            var dnsRestorePlan = await BuildDnsRestorePlanAsync(ct);
+            if (managedIps.Count == 0
+                && dnsRestorePlan.ServicesToRestore.Count == 0
+                && dnsRestorePlan.ServicesResolvedWithoutRestore.Count == 0)
             {
-                Log("no managed routes or DNS overrides to restore.");
+                Log(appState.RawTunnelDnsCleanupDebt is null
+                    ? "no managed routes or DNS overrides to restore."
+                    : "DNS cleanup debt is still pending because its exact service state could not be confirmed.");
                 return;
             }
 
-            // Route deletes and DNS resets go through one batched admin script.
-            await MacExitCleanupService.RunAsync(
-                splitConfigPath: null,
-                rawTunnelName: null,
-                managedIps,
-                dnsServices,
+            var request = new MacCleanupRequest
+            {
+                ManagedIpsToRemove = managedIps,
+                DnsRestorePlan = dnsRestorePlan
+            };
+            var result = await MacExitCleanupService.RunAsync(
+                request,
                 "WireGuard split tunnel needs to restore routes and DNS",
                 ct);
 
-            if (managedIps.Count > 0)
-            {
-                appState = appState with { ManagedRouteSnapshot = [] };
-                SaveState();
-                RefreshDomainRows();
-            }
-
-            Log($"removed {managedIps.Count} managed route(s); restored DHCP DNS on {dnsServices.Count} service(s).");
+            ApplyCleanupResult(request, result);
+            RefreshDomainRows();
+            LogCleanupOutcome(request, result);
         });
     }
 
@@ -980,10 +1034,49 @@ public partial class MainWindow : Window
         if (adopted is not null)
         {
             activeTunnelName = adopted;
+            var splitConfigPath = Path.Combine(
+                GetDataDirectory(),
+                MacSplitTunnelConfigService.SplitTunnelConfigFileName);
+            if (File.Exists(splitConfigPath)
+                && !string.Equals(
+                    appState.ActiveSplitTunnelConfigPath,
+                    splitConfigPath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                appState = appState with { ActiveSplitTunnelConfigPath = splitConfigPath };
+                SaveState();
+            }
+
             Log($"adopted running split tunnel {MacSplitTunnelConfigService.SplitTunnelName} on {adopted} from a previous session");
+        }
+        else if (!string.IsNullOrWhiteSpace(appState.ActiveSplitTunnelConfigPath)
+                 && MacTunnelNameResolver.GetExactMappingPresence(
+                     MacSplitTunnelConfigService.SplitTunnelName) == MacTunnelMappingPresence.Absent)
+        {
+            appState = appState with { ActiveSplitTunnelConfigPath = null };
+            SaveState();
         }
 
         ReconcileRawTunnel();
+        ReconcileDnsCleanupDebt();
+    }
+
+    private void ReconcileDnsCleanupDebt()
+    {
+        var debt = appState.RawTunnelDnsCleanupDebt;
+        if (debt is null || !string.IsNullOrWhiteSpace(appState.ActiveRawTunnelName))
+        {
+            return;
+        }
+
+        var mappingPresence = MacTunnelNameResolver.GetExactMappingPresence(debt.TunnelName);
+        if (mappingPresence != MacTunnelMappingPresence.Absent)
+        {
+            Log($"saved DNS cleanup belongs to full tunnel {debt.TunnelName}, whose exact mapping is {mappingPresence}; keeping it for retry.");
+            return;
+        }
+
+        _ = RepairDnsAfterStaleRawTunnelAsync();
     }
 
     private void ReconcileRawTunnel()
@@ -1012,51 +1105,106 @@ public partial class MainWindow : Window
             return;
         }
 
-        // The full tunnel died without wg-quick down (crash/reboot), so its
-        // DNS override was never rolled back. Repair it now or the user may
-        // have no working DNS at all.
+        // The exact raw mapping is confirmed gone. Its tunnel ownership is no
+        // longer debt, but its separately persisted DNS snapshot remains until
+        // each service is confirmed or restored.
         appState = appState with { ActiveRawTunnelName = null };
         SaveState();
-        Log($"full tunnel {rawTunnelName} from a previous session is gone; checking for leftover DNS override...");
-        _ = RepairDnsAfterStaleRawTunnelAsync();
+        if (appState.RawTunnelDnsCleanupDebt is not null)
+        {
+            Log($"full tunnel {rawTunnelName} from a previous session is gone; restoring its saved DNS state...");
+        }
     }
 
     private async Task RepairDnsAfterStaleRawTunnelAsync()
     {
         await RunGuardedAsync("repair DNS", async ct =>
         {
-            var dnsServices = await DiscoverTunnelDnsServicesAsync(ct);
-            if (dnsServices.Count == 0)
+            var dnsRestorePlan = await BuildDnsRestorePlanAsync(ct);
+            if (dnsRestorePlan.ServicesToRestore.Count == 0
+                && dnsRestorePlan.ServicesResolvedWithoutRestore.Count == 0)
             {
-                Log("system DNS is clean; nothing to repair.");
+                Log(appState.RawTunnelDnsCleanupDebt is null
+                    ? "system DNS is clean; nothing to repair."
+                    : "saved DNS cleanup is still pending because its exact service state could not be confirmed.");
                 return;
             }
 
-            await MacDnsRepairService.ResetServicesAsync(dnsServices, ct);
-            Log($"restored DHCP DNS on: {string.Join(", ", dnsServices)}");
+            var request = new MacCleanupRequest { DnsRestorePlan = dnsRestorePlan };
+            var result = await MacExitCleanupService.RunAsync(
+                request,
+                "WireGuard split tunnel needs to restore saved system DNS",
+                ct);
+            ApplyCleanupResult(request, result);
+            LogCleanupOutcome(request, result);
         });
     }
 
-    private async Task<IReadOnlyList<string>> DiscoverTunnelDnsServicesAsync(CancellationToken ct)
+    private async Task<MacDnsRestorePlan> BuildDnsRestorePlanAsync(CancellationToken ct)
     {
-        var configPath = selectedConfigPath ?? appState.SelectedTunnelConfigPath;
-        if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath))
+        var debt = appState.RawTunnelDnsCleanupDebt;
+        if (debt is null)
         {
-            return [];
+            // Split-only operation never creates DNS debt, so it never even
+            // enumerates network services during cleanup.
+            return new MacDnsRestorePlan();
         }
 
-        string configText;
         try
         {
-            configText = await File.ReadAllTextAsync(configPath, ct);
+            var current = await MacDnsRepairService.CaptureSnapshotAsync(ct);
+            return MacDnsRepairService.PlanSnapshotRestore(
+                debt,
+                MacDnsRepairService.ToSnapshotMap(current));
         }
-        catch
+        catch (OperationCanceledException)
         {
-            return [];
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Log($"could not verify saved DNS cleanup state: {ToFriendlyMacError(ex.Message)}");
+            return new MacDnsRestorePlan
+            {
+                TunnelName = debt.TunnelName,
+                ConfigPath = debt.ConfigPath
+            };
+        }
+    }
+
+    private void ApplyCleanupResult(MacCleanupRequest request, MacCleanupResult result)
+    {
+        appState = MacCleanupStateReducer.Apply(appState, request, result);
+        SaveState();
+    }
+
+    private void LogCleanupOutcome(MacCleanupRequest request, MacCleanupResult result)
+    {
+        if (result.Cancelled)
+        {
+            Log("cleanup was cancelled; all unresolved ownership was saved for retry.");
+            return;
         }
 
-        var tunnelDns = MacSplitTunnelConfigService.ExtractDnsServers(configText);
-        return await MacDnsRepairService.DiscoverServicesToResetAsync(tunnelDns, ct);
+        var requestedTunnelStops =
+            (request.SplitConfigPath is null ? 0 : 1)
+            + (request.RawTunnelName is null ? 0 : 1)
+            + request.AdditionalTunnelTargets.Count;
+        var successfulTunnelStops =
+            (result.SplitTunnelStopped ? 1 : 0)
+            + (result.RawTunnelStopped ? 1 : 0)
+            + result.AdditionalTunnelTargetsStopped.Count;
+        var requestedDnsRestores = request.DnsRestorePlan.ServicesToRestore.Count;
+        var unresolved = successfulTunnelStops < requestedTunnelStops
+            || result.RemovedManagedIps.Count < request.ManagedIpsToRemove.Count
+            || result.RestoredDnsServices.Count < requestedDnsRestores
+            || !result.BatchCompleted;
+
+        Log($"cleanup: stopped {successfulTunnelStops}/{requestedTunnelStops} tunnel target(s), removed {result.RemovedManagedIps.Count}/{request.ManagedIpsToRemove.Count} route(s), restored {result.RestoredDnsServices.Count}/{requestedDnsRestores} DNS service(s).");
+        if (unresolved)
+        {
+            Log("cleanup incomplete; remaining app-owned state was saved for retry.");
+        }
     }
 
     private void RefreshTunnelStatus()
@@ -1108,11 +1256,17 @@ public partial class MainWindow : Window
 
             // Only include work that is actually pending so a clean system
             // quits without any admin prompt.
-            var splitConfigPath = Path.Combine(GetDataDirectory(), MacSplitTunnelConfigService.SplitTunnelConfigFileName);
+            var generatedSplitConfigPath = Path.Combine(
+                GetDataDirectory(),
+                MacSplitTunnelConfigService.SplitTunnelConfigFileName);
             var splitMappingPresence = MacTunnelNameResolver.GetExactMappingPresence(
                 MacSplitTunnelConfigService.SplitTunnelName);
             var splitTunnelPossiblyUp =
                 MacTunnelLifecyclePlanner.ShouldAttemptCleanup(splitMappingPresence);
+            var splitConfigPath = appState.ActiveSplitTunnelConfigPath
+                                  ?? (File.Exists(generatedSplitConfigPath)
+                                      ? generatedSplitConfigPath
+                                      : null);
             var rawTunnelName = appState.ActiveRawTunnelName;
             var rawTunnelPossiblyUp = !string.IsNullOrWhiteSpace(rawTunnelName)
                 && MacTunnelLifecyclePlanner.ShouldAttemptCleanup(
@@ -1121,22 +1275,27 @@ public partial class MainWindow : Window
                 .Select(entry => entry.IpAddress)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
-            var dnsServices = await DiscoverTunnelDnsServicesAsync(cts.Token);
+            var dnsRestorePlan = await BuildDnsRestorePlanAsync(cts.Token);
 
             Log("restoring normal routing before quitting...");
-            var cleaned = await MacExitCleanupService.RunAsync(
-                splitTunnelPossiblyUp && File.Exists(splitConfigPath) ? splitConfigPath : null,
-                rawTunnelPossiblyUp ? rawTunnelName : null,
-                managedIps,
-                dnsServices,
+            var request = new MacCleanupRequest
+            {
+                SplitConfigPath = splitTunnelPossiblyUp
+                                  && splitConfigPath is not null
+                                  && File.Exists(splitConfigPath)
+                    ? splitConfigPath
+                    : null,
+                RawTunnelName = rawTunnelPossiblyUp ? rawTunnelName : null,
+                ManagedIpsToRemove = managedIps,
+                DnsRestorePlan = dnsRestorePlan
+            };
+            var result = await MacExitCleanupService.RunAsync(
+                request,
                 "WireGuard split tunnel is restoring normal routing before quitting",
                 cts.Token);
 
-            if (cleaned)
-            {
-                appState = appState with { ManagedRouteSnapshot = [], ActiveRawTunnelName = null };
-                SaveState();
-            }
+            ApplyCleanupResult(request, result);
+            LogCleanupOutcome(request, result);
         }
         catch (Exception ex)
         {

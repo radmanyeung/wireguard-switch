@@ -17,7 +17,13 @@ public sealed record AppState(
     // wg-quick tunnel started via the raw "Enable Tunnel" path (full tunnel:
     // default route + DNS override). Persisted so a restart still knows a
     // teardown is owed even after a crash.
-    string? ActiveRawTunnelName = null)
+    string? ActiveRawTunnelName = null,
+    // Exact generated config path whose split tunnel still needs a proven
+    // wg-quick down before ownership can be forgotten.
+    string? ActiveSplitTunnelConfigPath = null,
+    // Exact pre-raw-tunnel DNS/search-domain state. This stores only resolver
+    // values and config identity, never WireGuard config text or private keys.
+    MacRawTunnelDnsCleanupDebt? RawTunnelDnsCleanupDebt = null)
 {
     public Dictionary<string, List<ResolvedIpDetail>> LastKnownResolvedIpDetails { get; init; } =
         LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(StringComparer.OrdinalIgnoreCase);
@@ -31,6 +37,27 @@ public sealed record AppState(
 }
 
 public sealed record ManagedRouteEntry(string Domain, string IpAddress);
+
+public sealed record MacDnsServiceSnapshot(
+    string ServiceName,
+    List<string>? DnsServers = null,
+    List<string>? SearchDomains = null)
+{
+    public List<string> DnsServers { get; init; } = DnsServers ?? [];
+    public List<string> SearchDomains { get; init; } = SearchDomains ?? [];
+}
+
+public sealed record MacRawTunnelDnsCleanupDebt(
+    string TunnelName,
+    string ConfigPath,
+    List<string>? TunnelDnsServers = null,
+    List<string>? TunnelSearchDomains = null,
+    List<MacDnsServiceSnapshot>? Services = null)
+{
+    public List<string> TunnelDnsServers { get; init; } = TunnelDnsServers ?? [];
+    public List<string> TunnelSearchDomains { get; init; } = TunnelSearchDomains ?? [];
+    public List<MacDnsServiceSnapshot> Services { get; init; } = Services ?? [];
+}
 
 public enum ResolvedIpSourceKind
 {

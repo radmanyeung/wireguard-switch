@@ -91,4 +91,21 @@ public sealed class MacTunnelNameResolverTests
 
         result.Should().Be(MacTunnelMappingPresence.Unknown);
     }
+
+    [Fact]
+    public void GetExactMappingPresence_MaliciousBareName_DoesNotProbeFilesystem()
+    {
+        var probed = false;
+
+        var result = MacTunnelNameResolver.GetExactMappingPresence(
+            "../x\"; touch pwned; #",
+            _ =>
+            {
+                probed = true;
+                return FileAttributes.Normal;
+            });
+
+        result.Should().Be(MacTunnelMappingPresence.Unknown);
+        probed.Should().BeFalse();
+    }
 }

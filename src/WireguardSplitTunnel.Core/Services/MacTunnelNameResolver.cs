@@ -60,6 +60,10 @@ public static class MacTunnelNameResolver
         Func<string, FileAttributes> getAttributes)
     {
         ArgumentNullException.ThrowIfNull(getAttributes);
+        if (!MacTunnelStopScript.IsValidTunnelName(tunnelName))
+        {
+            return MacTunnelMappingPresence.Unknown;
+        }
 
         try
         {
@@ -102,6 +106,11 @@ public static class MacTunnelNameResolver
         Func<IEnumerable<string>> enumerateSocketFiles,
         Func<string, bool> isInterfaceUp)
     {
+        if (!MacTunnelStopScript.IsValidTunnelName(tunnelName))
+        {
+            return null;
+        }
+
         var nameFile = GetNameFilePath(tunnelName);
         try
         {

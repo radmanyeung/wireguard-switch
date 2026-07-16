@@ -25,12 +25,21 @@ public sealed class MacTunnelDisablePlannerTests
     }
 
     [Fact]
-    public void BuildTargets_SelectedConfig_UsesTunnelNameNotConfigPath()
+    public void BuildTargets_SelectedConfig_UsesExplicitConfigPath()
     {
         MacTunnelDisablePlanner.BuildTargets(
                 null,
                 null,
                 "/opt/homebrew/etc/wireguard/nordusa1.conf")
-            .Should().Equal("nordusa1");
+            .Should().Equal("/opt/homebrew/etc/wireguard/nordusa1.conf");
+    }
+
+    [Fact]
+    public void BuildTargets_MaliciousSelectedConfig_DoesNotCreateBareTunnelTarget()
+    {
+        const string configPath = "/tmp/x\"; /usr/bin/touch /tmp/pwned; #.conf";
+
+        MacTunnelDisablePlanner.BuildTargets(null, null, configPath)
+            .Should().Equal(configPath);
     }
 }
