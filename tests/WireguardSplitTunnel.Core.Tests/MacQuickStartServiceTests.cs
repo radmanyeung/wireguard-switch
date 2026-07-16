@@ -16,7 +16,8 @@ public sealed class MacQuickStartServiceTests
         result.Status.Should().Be(MacQuickStartStatus.BlockedByOtherVpn);
         result.ShouldStartTunnel.Should().BeFalse();
         result.SelectedConfigPath.Should().BeNull();
-        result.Message.Should().Contain("Disconnect");
+        result.Message.Should().Contain("Tailscale Exit Node")
+            .And.Contain("full-tunnel VPN");
     }
 
     [Fact]

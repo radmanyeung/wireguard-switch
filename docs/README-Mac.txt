@@ -102,15 +102,19 @@ Using The App
 -------------
 
 1. Open the app with Start WireGuard Split Tunnel.command or WireguardSplitTunnel.app.
-2. Disconnect the official WireGuard app if it is connected. Start AI VPN
-   needs to own the tunnel; it will refuse to run while another VPN routes
-   all traffic.
+2. Disconnect the official WireGuard app if it is connected. Ordinary Tailscale
+   and MagicDNS can stay connected, but Tailscale Exit Node must be off. Start AI
+   VPN refuses to run while an Exit Node or another full-tunnel VPN owns the
+   default route.
 3. In Tunnel, choose a config from /opt/homebrew/etc/wireguard.
 4. Click Start AI VPN and approve the macOS administrator prompt.
 5. Start AI VPN creates a split tunnel: only the AI Services Bundle domains
    go through WireGuard; all other traffic and system DNS stay on your normal
    network. The tunnel runs under the name wgst-split (a derived copy of your
    config with Table = off); your original config file is never modified.
+   With Tailscale connected and Exit Node off, the app leaves Tailscale and
+   MagicDNS unchanged. Status, AI routes, Monitor, and cleanup stay pinned to
+   the named wgst-split tunnel and never fall back to Tailscale's utun interface.
 6. The app adds the AI Services Bundle, applies routes, and starts Monitor.
 7. In Monitor, check VPN/Normal speed, latency, and route classification.
 

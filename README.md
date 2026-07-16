@@ -99,9 +99,10 @@ directly from Terminal:
 
 Inside the app, the easiest path is now:
 
-1. Disconnect the official WireGuard app if it is connected. Start AI VPN
-   needs to own the tunnel; it will refuse to run while another VPN routes
-   all traffic.
+1. Disconnect the official WireGuard app if it is connected. Ordinary Tailscale
+   and MagicDNS can stay connected, but Tailscale **Exit Node must be off**.
+   Start AI VPN refuses to run while an Exit Node or another full-tunnel VPN
+   owns the default route.
 2. Choose a config from `/opt/homebrew/etc/wireguard`.
 3. Click **Start AI VPN** and approve the macOS administrator prompt.
 
@@ -109,6 +110,10 @@ Start AI VPN creates a split tunnel: only the AI Services Bundle domains go
 through WireGuard; all other traffic and system DNS stay on your normal
 network. The tunnel runs under the name `wgst-split` (a derived copy of your
 config with `Table = off`); your original config file is never modified.
+
+When Tailscale is connected without an Exit Node, the app keeps Tailscale and
+MagicDNS unchanged. Status, AI routes, Monitor, and cleanup are pinned to the
+named `wgst-split` tunnel and never fall back to Tailscale's `utun` interface.
 
 If the app opens but the tunnel will not enable, this is a tunnel-setup issue,
 not an app-launch issue. Run `./check-mac-deps.sh` again, confirm that a real

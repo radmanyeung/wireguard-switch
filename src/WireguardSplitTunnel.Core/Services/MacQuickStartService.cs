@@ -35,7 +35,7 @@ public static class MacQuickStartService
                 MacQuickStartStatus.BlockedByOtherVpn,
                 null,
                 ShouldStartTunnel: false,
-                $"Another VPN currently routes all traffic ({iface}). Disconnect the WireGuard app (or other VPN) first, then click Start AI VPN again.");
+                $"A VPN or Tailscale Exit Node currently routes all traffic ({iface}). Turn off Tailscale Exit Node or disconnect the full-tunnel VPN, then click Start AI VPN again.");
         }
 
         var selection = SelectConfig(savedConfigPath, discoveredConfigPaths);
