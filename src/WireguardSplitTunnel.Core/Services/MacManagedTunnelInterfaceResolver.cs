@@ -6,14 +6,14 @@ public static class MacManagedTunnelInterfaceResolver
 {
     [SupportedOSPlatform("macos")]
     public static string? TryGetSplitTunnelInterface() =>
-        MacTunnelNameResolver.TryGetInterfaceForTunnel(
+        MacTunnelNameResolver.TryGetExactInterfaceForTunnel(
             MacSplitTunnelConfigService.SplitTunnelName);
 
     [SupportedOSPlatform("macos")]
     public static string? TryGetManagedInterface(string? activeRawTunnelName) =>
         ResolveManagedInterface(
             activeRawTunnelName,
-            MacTunnelNameResolver.TryGetInterfaceForTunnel);
+            MacTunnelNameResolver.TryGetExactInterfaceForTunnel);
 
     internal static string? ResolveManagedInterface(
         string? activeRawTunnelName,

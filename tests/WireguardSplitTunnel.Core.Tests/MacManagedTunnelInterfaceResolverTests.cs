@@ -27,13 +27,19 @@ public sealed class MacManagedTunnelInterfaceResolverTests
     }
 
     [Fact]
-    public void ResolveManagedInterface_OnlyUnrelatedTailscaleUtunExists_ReturnsNull()
+    public void ResolveManagedInterface_UnreadableSplitMappingAndSingleUnrelatedSocket_ReturnsNull()
     {
         const string tailscaleInterface = "utun4";
 
         var result = MacManagedTunnelInterfaceResolver.ResolveManagedInterface(
             activeRawTunnelName: null,
-            resolveByTunnelName: _ => null);
+            resolveByTunnelName: name =>
+                MacTunnelNameResolver.TryGetExactInterfaceForTunnel(
+                    name,
+                    nameFileExists: _ => true,
+                    readNameFile: _ => throw new UnauthorizedAccessException(),
+                    enumerateSocketFiles: () => ["/var/run/wireguard/utun4.sock"],
+                    isInterfaceUp: candidate => candidate == tailscaleInterface));
 
         result.Should().BeNull();
         result.Should().NotBe(tailscaleInterface);

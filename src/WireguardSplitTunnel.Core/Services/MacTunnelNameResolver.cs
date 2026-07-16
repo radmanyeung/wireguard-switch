@@ -26,12 +26,50 @@ public static class MacTunnelNameResolver
     }
 
     [SupportedOSPlatform("macos")]
-    public static string? TryGetInterfaceForTunnel(string tunnelName)
+    public static string? TryGetInterfaceForTunnel(string tunnelName) =>
+        ResolveInterfaceForTunnel(
+            tunnelName,
+            allowSocketFallback: true,
+            File.Exists,
+            File.ReadAllText,
+            () => Directory.EnumerateFiles(WireguardRunDirectory, "*.sock"),
+            IsInterfaceUp);
+
+    [SupportedOSPlatform("macos")]
+    public static string? TryGetExactInterfaceForTunnel(string tunnelName) =>
+        TryGetExactInterfaceForTunnel(
+            tunnelName,
+            File.Exists,
+            File.ReadAllText,
+            () => Directory.EnumerateFiles(WireguardRunDirectory, "*.sock"),
+            IsInterfaceUp);
+
+    internal static string? TryGetExactInterfaceForTunnel(
+        string tunnelName,
+        Func<string, bool> nameFileExists,
+        Func<string, string> readNameFile,
+        Func<IEnumerable<string>> enumerateSocketFiles,
+        Func<string, bool> isInterfaceUp) =>
+        ResolveInterfaceForTunnel(
+            tunnelName,
+            allowSocketFallback: false,
+            nameFileExists,
+            readNameFile,
+            enumerateSocketFiles,
+            isInterfaceUp);
+
+    private static string? ResolveInterfaceForTunnel(
+        string tunnelName,
+        bool allowSocketFallback,
+        Func<string, bool> nameFileExists,
+        Func<string, string> readNameFile,
+        Func<IEnumerable<string>> enumerateSocketFiles,
+        Func<string, bool> isInterfaceUp)
     {
         var nameFile = Path.Combine(WireguardRunDirectory, tunnelName + ".name");
         try
         {
-            if (!File.Exists(nameFile))
+            if (!nameFileExists(nameFile))
             {
                 return null;
             }
@@ -39,18 +77,17 @@ public static class MacTunnelNameResolver
             string? utun;
             try
             {
-                utun = ParseUtunName(File.ReadAllText(nameFile));
+                utun = ParseUtunName(readNameFile(nameFile));
             }
-            catch (UnauthorizedAccessException)
+            catch (UnauthorizedAccessException) when (allowSocketFallback)
             {
                 // wg-quick creates the .name file root-only. The tunnel exists
                 // (the file is there); recover the utun from the socket file
                 // names, which only require the directory to be listable.
-                utun = ChooseUnambiguousSocketInterface(
-                    Directory.EnumerateFiles(WireguardRunDirectory, "*.sock"));
+                utun = ChooseUnambiguousSocketInterface(enumerateSocketFiles());
             }
 
-            return utun is not null && IsInterfaceUp(utun) ? utun : null;
+            return utun is not null && isInterfaceUp(utun) ? utun : null;
         }
         catch
         {
