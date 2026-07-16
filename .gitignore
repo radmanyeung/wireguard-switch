@@ -8,6 +8,7 @@ NuGet/
 .dotnet_home/
 .claude/
 .mac-test-export/
+.worktrees/
 WireguardSplitTunnel/
 **/bin/
 **/obj/
@@ -16,4 +17,3 @@ install.status.txt
 
 wgcon/
 wgcon/*.conf
-
