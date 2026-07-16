@@ -14,7 +14,6 @@ namespace WireguardSplitTunnel.MacApp.Views;
 public partial class MainWindow : Window
 {
     private readonly MainWindowState viewState = new();
-    private readonly IWireguardDetector detector = new SystemWireguardDetector();
     private readonly IDomainResolver resolver = new SystemDomainResolver();
     private readonly ITunnelControlService tunnelControl = new TunnelControlService();
     private readonly IRouteService routeService = new RouteService();
@@ -231,28 +230,13 @@ public partial class MainWindow : Window
 
     private async void OnDisableTunnelClick(object? sender, RoutedEventArgs e)
     {
-        var splitConfigPath = Path.Combine(GetDataDirectory(), MacSplitTunnelConfigService.SplitTunnelConfigFileName);
-        var targets = new List<string>();
-        if (File.Exists(splitConfigPath))
-        {
-            targets.Add(splitConfigPath);
-        }
-
-        if (!string.IsNullOrWhiteSpace(appState.ActiveRawTunnelName))
-        {
-            targets.Add(appState.ActiveRawTunnelName!);
-        }
-
-        if (!string.IsNullOrWhiteSpace(selectedConfigPath))
-        {
-            targets.Add(WireguardConfigCatalog.GetTunnelName(selectedConfigPath!));
-        }
-        else if (!string.IsNullOrWhiteSpace(activeTunnelName))
-        {
-            targets.Add(activeTunnelName!);
-        }
-
-        targets = targets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var splitConfigPath = Path.Combine(
+            GetDataDirectory(),
+            MacSplitTunnelConfigService.SplitTunnelConfigFileName);
+        var targets = MacTunnelDisablePlanner.BuildTargets(
+            File.Exists(splitConfigPath) ? splitConfigPath : null,
+            appState.ActiveRawTunnelName,
+            selectedConfigPath);
         if (targets.Count == 0)
         {
             Log("nothing to disable.");
@@ -366,9 +350,11 @@ public partial class MainWindow : Window
 
     private async void OnApplyRoutesClick(object? sender, RoutedEventArgs e)
     {
-        if (!detector.TryGetActiveInterface(out var iface))
+        var iface = MacManagedTunnelInterfaceResolver.TryGetManagedInterface(
+            appState.ActiveRawTunnelName);
+        if (iface is null)
         {
-            Log("no active WireGuard interface detected. Enable the tunnel first.");
+            Log("no app-managed WireGuard tunnel detected. Start AI VPN or enable the selected tunnel first.");
             return;
         }
 
@@ -656,8 +642,13 @@ public partial class MainWindow : Window
 
         try
         {
-            detector.TryGetActiveInterface(out var wireGuardInterfaceName);
-            var snapshot = await networkMonitorService.CaptureAsync(appState, wireGuardInterfaceName, cts.Token);
+            var wireGuardInterfaceName =
+                MacManagedTunnelInterfaceResolver.TryGetManagedInterface(
+                    appState.ActiveRawTunnelName);
+            var snapshot = await networkMonitorService.CaptureAsync(
+                appState,
+                wireGuardInterfaceName,
+                cts.Token);
             if (generation != Volatile.Read(ref monitorRunGeneration) || !monitorTimer.IsEnabled)
             {
                 return;
@@ -825,7 +816,9 @@ public partial class MainWindow : Window
     {
         for (var attempt = 0; attempt < 12; attempt++)
         {
-            if (detector.TryGetActiveInterface(out var iface))
+            var iface =
+                MacManagedTunnelInterfaceResolver.TryGetSplitTunnelInterface();
+            if (iface is not null)
             {
                 activeTunnelName = iface;
                 return iface;
@@ -835,7 +828,7 @@ public partial class MainWindow : Window
         }
 
         throw new InvalidOperationException(
-            "Tunnel started, but no WireGuard interface was detected. Check the selected config and try Refresh Status.");
+            "The wgst-split tunnel started, but its WireGuard interface mapping was not detected. Routes were not applied; Tailscale was left unchanged.");
     }
 
     private void EnsureAiServicesPreset()
@@ -980,7 +973,8 @@ public partial class MainWindow : Window
         // A previous session may have left the split tunnel running (the app
         // used to forget it on restart). Re-adopt it so status, route restore,
         // and Disable Tunnel keep working against the right utun.
-        var adopted = MacTunnelNameResolver.TryGetInterfaceForTunnel(MacSplitTunnelConfigService.SplitTunnelName);
+        var adopted =
+            MacManagedTunnelInterfaceResolver.TryGetSplitTunnelInterface();
         if (adopted is not null)
         {
             activeTunnelName = adopted;
@@ -998,7 +992,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        var rawInterface = MacTunnelNameResolver.TryGetInterfaceForTunnel(rawTunnelName);
+        var rawInterface =
+            MacTunnelNameResolver.TryGetExactInterfaceForTunnel(rawTunnelName);
         if (rawInterface is not null)
         {
             activeTunnelName = rawInterface;
@@ -1055,29 +1050,19 @@ public partial class MainWindow : Window
 
     private void RefreshTunnelStatus()
     {
-        // Prefer our own split tunnel's mapping over the generic detector so the
-        // status reflects the tunnel this app manages.
-        var splitInterface = MacTunnelNameResolver.TryGetInterfaceForTunnel(MacSplitTunnelConfigService.SplitTunnelName);
-        if (splitInterface is not null)
-        {
-            activeTunnelName = splitInterface;
-            TunnelStatusText.Text = $"connected via {splitInterface}";
-            TunnelStatusText.Foreground = Brushes.SeaGreen;
-            return;
-        }
-
-        if (detector.TryGetActiveInterface(out var iface))
+        var iface = MacManagedTunnelInterfaceResolver.TryGetManagedInterface(
+            appState.ActiveRawTunnelName);
+        if (iface is not null)
         {
             activeTunnelName = iface;
             TunnelStatusText.Text = $"connected via {iface}";
             TunnelStatusText.Foreground = Brushes.SeaGreen;
+            return;
         }
-        else
-        {
-            activeTunnelName = null;
-            TunnelStatusText.Text = "not connected";
-            TunnelStatusText.Foreground = Brushes.Gray;
-        }
+
+        activeTunnelName = null;
+        TunnelStatusText.Text = "not connected";
+        TunnelStatusText.Foreground = Brushes.Gray;
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)
@@ -1113,10 +1098,11 @@ public partial class MainWindow : Window
             // Only include work that is actually pending so a clean system
             // quits without any admin prompt.
             var splitConfigPath = Path.Combine(GetDataDirectory(), MacSplitTunnelConfigService.SplitTunnelConfigFileName);
-            var splitTunnelUp = MacTunnelNameResolver.TryGetInterfaceForTunnel(MacSplitTunnelConfigService.SplitTunnelName) is not null;
+            var splitTunnelUp =
+                MacManagedTunnelInterfaceResolver.TryGetSplitTunnelInterface() is not null;
             var rawTunnelName = appState.ActiveRawTunnelName;
             var rawTunnelUp = !string.IsNullOrWhiteSpace(rawTunnelName)
-                && MacTunnelNameResolver.TryGetInterfaceForTunnel(rawTunnelName!) is not null;
+                && MacTunnelNameResolver.TryGetExactInterfaceForTunnel(rawTunnelName!) is not null;
             var managedIps = appState.ManagedRouteSnapshot
                 .Select(entry => entry.IpAddress)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
