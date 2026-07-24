@@ -28,6 +28,23 @@ public sealed class PrimaryAppStateLoaderTests
         "cdn.auth0.com"
     ];
 
+    private static readonly string[] LegacyClaudeDomains =
+    [
+        "claude.ai",
+        "*.claude.ai",
+        "anthropic.com",
+        "*.anthropic.com",
+        "api.anthropic.com",
+        "console.anthropic.com"
+    ];
+
+    private static readonly string[] ClaudeHelperDomains =
+    [
+        "claude.com",
+        "*.claude.com",
+        "downloads.claude.ai"
+    ];
+
     [Fact]
     public void Load_CompleteLegacyState_MigratesAndPersistsHelpers()
     {
@@ -69,6 +86,76 @@ public sealed class PrimaryAppStateLoaderTests
     }
 
     [Fact]
+    public void Load_CompleteLegacyClaudeState_MigratesAndPersistsHelpers()
+    {
+        var path = CreateTestPath();
+        try
+        {
+            var store = new StateStore(path);
+            store.Save(CreateLegacyClaudeState());
+
+            var loaded = PrimaryAppStateLoader.Load(store);
+            var persisted = store.Load();
+
+            AssertClaudeHelperRules(loaded);
+            AssertClaudeHelperRules(persisted);
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+    }
+
+    [Fact]
+    public void StateStoreLoad_CompleteLegacyClaudeState_RemainsMigrationFree()
+    {
+        var path = CreateTestPath();
+        try
+        {
+            var store = new StateStore(path);
+            store.Save(CreateLegacyClaudeState());
+
+            var loaded = store.Load();
+
+            GetClaudeHelperRules(loaded).Should().BeEmpty();
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+    }
+
+    [Fact]
+    public void Load_CombinedLegacyOpenAiAndClaudeState_MigratesAndPersistsBoth()
+    {
+        var path = CreateTestPath();
+        try
+        {
+            var store = new StateStore(path);
+            var combinedRules = LegacyDomains
+                .Concat(LegacyClaudeDomains)
+                .Select(domain => new DomainRule(domain, true, DomainRouteMode.UseWireGuard))
+                .ToList();
+            store.Save(new AppState(
+                combinedRules,
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase),
+                []));
+
+            var loaded = PrimaryAppStateLoader.Load(store);
+            var persisted = store.Load();
+
+            AssertHelperRules(loaded);
+            AssertClaudeHelperRules(loaded);
+            AssertHelperRules(persisted);
+            AssertClaudeHelperRules(persisted);
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+    }
+
+    [Fact]
     public void Load_NonLegacyState_DoesNotRewriteStateFile()
     {
         var path = CreateTestPath();
@@ -82,6 +169,7 @@ public sealed class PrimaryAppStateLoaderTests
             var loaded = PrimaryAppStateLoader.Load(store);
 
             GetHelperRules(loaded).Should().BeEmpty();
+            GetClaudeHelperRules(loaded).Should().BeEmpty();
             File.ReadAllText(path).Should().Be(originalJson);
         }
         finally
@@ -110,6 +198,14 @@ public sealed class PrimaryAppStateLoaderTests
             new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase),
             []);
 
+    private static AppState CreateLegacyClaudeState() =>
+        new(
+            LegacyClaudeDomains
+                .Select(domain => new DomainRule(domain, true, DomainRouteMode.UseWireGuard))
+                .ToList(),
+            new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase),
+            []);
+
     private static void AssertHelperRules(AppState state)
     {
         var helpers = GetHelperRules(state);
@@ -121,6 +217,19 @@ public sealed class PrimaryAppStateLoaderTests
 
     private static List<DomainRule> GetHelperRules(AppState state) => state.DomainRules
         .Where(rule => HelperDomains.Contains(rule.Domain, StringComparer.OrdinalIgnoreCase))
+        .ToList();
+
+    private static void AssertClaudeHelperRules(AppState state)
+    {
+        var helpers = GetClaudeHelperRules(state);
+        helpers.Should().HaveCount(3);
+        helpers.Select(rule => rule.Domain).Should().BeEquivalentTo(ClaudeHelperDomains);
+        helpers.Should().OnlyContain(rule =>
+            rule.Enabled && rule.Mode == DomainRouteMode.UseWireGuard);
+    }
+
+    private static List<DomainRule> GetClaudeHelperRules(AppState state) => state.DomainRules
+        .Where(rule => ClaudeHelperDomains.Contains(rule.Domain, StringComparer.OrdinalIgnoreCase))
         .ToList();
 
     private static string CreateTestPath()

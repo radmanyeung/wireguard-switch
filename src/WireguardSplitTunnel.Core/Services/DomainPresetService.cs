@@ -39,7 +39,10 @@ public static class DomainPresetService
         "anthropic.com",
         "*.anthropic.com",
         "api.anthropic.com",
-        "console.anthropic.com"
+        "console.anthropic.com",
+        "claude.com",
+        "*.claude.com",
+        "downloads.claude.ai"
     ];
 
     private static readonly string[] GoogleAiGeminiDomains =

@@ -31,7 +31,9 @@ public partial class MainWindow : Window
     private readonly IRunningSoftwareDiscovery runningSoftwareDiscovery = new SystemRunningSoftwareDiscovery();
     private readonly INetworkMonitorService networkMonitorService = new SystemNetworkMonitorService();
     private readonly DispatcherTimer monitorTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly DispatcherTimer dnsCacheLearningTimer = new() { Interval = TimeSpan.FromSeconds(10) };
     private readonly NetworkGraphHistory monitorGraphHistory = new(TimeSpan.FromSeconds(60));
+    private readonly IncrementalDnsRouteReconciler incrementalDnsRouteReconciler;
     private readonly IAppLogger logger;
     private readonly StateStore stateStore;
     private readonly StateStore appliedStateStore;
@@ -45,12 +47,14 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim softwareApplySemaphore = new(1, 1);
     private CancellationTokenSource? softwareReapplyDebounceCts;
     private CancellationTokenSource? monitorRefreshCts;
+    private readonly CancellationTokenSource dnsCacheLearningCts = new();
     private int softwareApplyInProgress;
     private int monitorRefreshInProgress;
     private int monitorRunGeneration;
     private int renewInProgress;
     private volatile bool suppressAutoSoftwareReapply;
     private bool mode2RoutingWarningShownThisSession;
+    private bool incrementalDomainStateSavePending;
     private const int BypassHalfDefaultMetric = 5;
     private const int WireGuardHalfDefaultMetric = 35;
     private static readonly string[] SafeDnsFallbackServers = ["8.8.8.8", "1.1.1.1"];
@@ -60,6 +64,7 @@ public partial class MainWindow : Window
     {
         this.runPostInstallSelfTestOnLoad = runPostInstallSelfTestOnLoad;
         InitializeComponent();
+        incrementalDnsRouteReconciler = new IncrementalDnsRouteReconciler(dnsCacheReader);
 
         var versionText = VersionDisplay.FromAssembly(Assembly.GetExecutingAssembly());
         Title = $"Wireguard Split Tunnel {versionText}";
@@ -130,6 +135,7 @@ public partial class MainWindow : Window
         NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
         NetworkChange.NetworkAvailabilityChanged += OnNetworkAvailabilityChanged;
         monitorTimer.Tick += OnMonitorTimerTick;
+        dnsCacheLearningTimer.Tick += OnDnsCacheLearningTimerTick;
         MonitorGraphCanvas.SizeChanged += OnMonitorGraphCanvasSizeChanged;
     }
     private async void OnWindowClosing(object? sender, CancelEventArgs e)
@@ -139,6 +145,8 @@ public partial class MainWindow : Window
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
         softwareReapplyDebounceCts?.Cancel();
         monitorTimer.Stop();
+        dnsCacheLearningTimer.Stop();
+        dnsCacheLearningCts.Cancel();
         monitorRefreshCts?.Cancel();
 
         if (allowCloseWithoutRestore || !state.RestoreNormalRoutingOnExit)
@@ -150,7 +158,7 @@ public partial class MainWindow : Window
 
         try
         {
-            await RestoreNormalRoutingOnExitAsync();
+            await DomainRouteOperationSerializer.RunAsync(renewSemaphore, RestoreNormalRoutingOnExitAsync);
         }
         catch (Exception ex)
         {
@@ -203,6 +211,10 @@ public partial class MainWindow : Window
         finally
         {
             suppressAutoSoftwareReapply = false;
+            if (!isWindowClosing)
+            {
+                dnsCacheLearningTimer.Start();
+            }
         }
     }
     private void OnNetworkAddressChanged(object? sender, EventArgs e)
@@ -281,6 +293,70 @@ public partial class MainWindow : Window
         await RefreshNetworkMonitorAsync(Volatile.Read(ref monitorRunGeneration));
     }
 
+    private async void OnDnsCacheLearningTimerTick(object? sender, EventArgs e)
+    {
+        if (isWindowClosing)
+        {
+            return;
+        }
+
+        if (!await renewSemaphore.WaitAsync(0))
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref renewInProgress, 1);
+        try
+        {
+            if (!detector.TryGetActiveInterface(out _))
+            {
+                return;
+            }
+
+            var result = await incrementalDnsRouteReconciler.ReconcileAsync(
+                state,
+                async (toAdd, _) =>
+                {
+                    await ApplyRoutesViaCurrentWireGuardAsync(toAdd, [], CancellationToken.None);
+                    await HealMissingDomainRoutesAsync(toAdd.ToList(), CancellationToken.None);
+                },
+                dnsCacheLearningCts.Token);
+
+            if (result.StateChanged)
+            {
+                incrementalDomainStateSavePending = true;
+            }
+
+            if (!result.StateChanged && !incrementalDomainStateSavePending)
+            {
+                return;
+            }
+
+            stateStore.Save(state);
+            appliedStateStore.Save(RuleStateMutations.Clone(state));
+            incrementalDomainStateSavePending = false;
+            RefreshDomainGrid();
+
+            if (result.AddedRouteCount > 0)
+            {
+                logger.Info(
+                    $"Incremental DNS learning added {result.AddedRouteCount} IPv4 routes from {result.LearnedIpCount} learned IPs.");
+            }
+        }
+        catch (OperationCanceledException) when (dnsCacheLearningCts.IsCancellationRequested)
+        {
+            logger.Info("Incremental DNS learning canceled.");
+        }
+        catch (Exception ex)
+        {
+            logger.Error("Incremental DNS learning failed.", ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref renewInProgress, 0);
+            renewSemaphore.Release();
+        }
+    }
     private void OnMonitorGraphCanvasSizeChanged(object sender, SizeChangedEventArgs e)
     {
         RenderNetworkMonitorGraph();
@@ -801,23 +877,37 @@ public partial class MainWindow : Window
         MessageBox.Show(this, "Current domain/software lists saved to temp.", "Wireguard Split Tunnel");
     }
 
-    private void OnLoadTempClicked(object sender, RoutedEventArgs e)
+    private async void OnLoadTempClicked(object sender, RoutedEventArgs e)
     {
         var temp = tempListStore.Load();
         var unifiedMode = temp.DomainGlobalDefaultMode;
 
-        state = state with
+        await DomainRouteOperationSerializer.RunAsync(renewSemaphore, () =>
         {
-            DomainRules = temp.DomainRules.Select(rule => rule with { }).ToList(),
-            SoftwareRules = (temp.SoftwareRules ?? []).Select(rule => rule with { }).ToList(),
-            DomainGlobalDefaultMode = unifiedMode,
-            SoftwareGlobalDefaultMode = unifiedMode
-        };
+            if (isWindowClosing)
+            {
+                return;
+            }
 
-        stateStore.Save(state);
-        LoadSettingsToUi();
-        RefreshDomainGrid();
-        RefreshSoftwareGrid();
+            state = state with
+            {
+                DomainRules = temp.DomainRules.Select(rule => rule with { }).ToList(),
+                SoftwareRules = (temp.SoftwareRules ?? []).Select(rule => rule with { }).ToList(),
+                DomainGlobalDefaultMode = unifiedMode,
+                SoftwareGlobalDefaultMode = unifiedMode
+            };
+
+            stateStore.Save(state);
+            LoadSettingsToUi();
+            RefreshDomainGrid();
+            RefreshSoftwareGrid();
+        });
+
+        if (isWindowClosing)
+        {
+            return;
+        }
+
         MessageBox.Show(this, "Temp lists loaded.", "Wireguard Split Tunnel");
     }
 
@@ -920,7 +1010,7 @@ public partial class MainWindow : Window
         };
     }
 
-    private void OnToggleDomainEnabledClicked(object sender, RoutedEventArgs e)
+    private async void OnToggleDomainEnabledClicked(object sender, RoutedEventArgs e)
     {
         if (DomainRulesGrid.SelectedItem is not DomainRow selected)
         {
@@ -928,12 +1018,27 @@ public partial class MainWindow : Window
             return;
         }
 
-        RuleStateMutations.TrySetRuleEnabled(state, selected.Domain, !selected.Enabled);
-        stateStore.Save(state);
-        RefreshDomainGrid();
+        await DomainRouteOperationSerializer.RunAsync(renewSemaphore, () =>
+        {
+            if (isWindowClosing)
+            {
+                return;
+            }
+
+            var currentRule = state.DomainRules.FirstOrDefault(rule =>
+                string.Equals(rule.Domain, selected.Domain, StringComparison.OrdinalIgnoreCase));
+            if (currentRule is null)
+            {
+                return;
+            }
+
+            RuleStateMutations.TrySetRuleEnabled(state, currentRule.Domain, !currentRule.Enabled);
+            stateStore.Save(state);
+            RefreshDomainGrid();
+        });
     }
 
-    private void OnDeleteDomainRuleClicked(object sender, RoutedEventArgs e)
+    private async void OnDeleteDomainRuleClicked(object sender, RoutedEventArgs e)
     {
         if (DomainRulesGrid.SelectedItem is not DomainRow selected)
         {
@@ -941,13 +1046,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!RuleStateMutations.RemoveRule(state, selected.Domain))
+        await DomainRouteOperationSerializer.RunAsync(renewSemaphore, () =>
         {
-            return;
-        }
+            if (isWindowClosing)
+            {
+                return;
+            }
 
-        stateStore.Save(state);
-        RefreshDomainGrid();
+            if (!RuleStateMutations.RemoveRule(state, selected.Domain))
+            {
+                return;
+            }
+
+            stateStore.Save(state);
+            RefreshDomainGrid();
+        });
     }
 
     private void OnViewDomainIpsClicked(object sender, RoutedEventArgs e)
@@ -980,6 +1093,11 @@ public partial class MainWindow : Window
         Interlocked.Exchange(ref renewInProgress, 1);
         try
         {
+            if (isWindowClosing)
+            {
+                return false;
+            }
+
             return await RenewDomainRoutesAsync(showMessage, fromStartup);
         }
         finally
@@ -1507,7 +1625,7 @@ public partial class MainWindow : Window
         logger.Info($"Self test completed. defaultViaWg={defaultViaWireguard}, expectedHostRoutes={expectedHostRoutes}, missingHostRoutes={missingHostRoutes}, dnsOk={dnsOk}");
         MessageBox.Show(this, summary.ToString(), "Self Test");
     }
-    private void OnRollbackClicked(object sender, RoutedEventArgs e)
+    private async void OnRollbackClicked(object sender, RoutedEventArgs e)
     {
         var appliedStatePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -1520,11 +1638,25 @@ public partial class MainWindow : Window
             return;
         }
 
-        state = RuleStateMutations.Clone(appliedStateStore.Load());
-        stateStore.Save(state);
-        LoadSettingsToUi();
-        RefreshDomainGrid();
-        RefreshSoftwareGrid();
+        await DomainRouteOperationSerializer.RunAsync(renewSemaphore, () =>
+        {
+            if (isWindowClosing)
+            {
+                return;
+            }
+
+            state = RuleStateMutations.Clone(appliedStateStore.Load());
+            stateStore.Save(state);
+            LoadSettingsToUi();
+            RefreshDomainGrid();
+            RefreshSoftwareGrid();
+        });
+
+        if (isWindowClosing)
+        {
+            return;
+        }
+
         MessageBox.Show(this, "Rolled back to last applied snapshot.", "Wireguard Split Tunnel");
     }
 
