@@ -64,4 +64,37 @@ public sealed class DomainPresetServiceTests
             "*.googleusercontent.com"
         });
     }
+
+    [Fact]
+    public void GetPresetDomains_IncludesApprovedClaudeCodeDomainsWithoutSharedTelemetry()
+    {
+        var claudeDomains = DomainPresetService.GetDomains(DomainPreset.ClaudeAnthropic);
+        var bundleDomains = DomainPresetService.GetDomains(DomainPreset.AiServicesBundle);
+        var approvedDomains = new[]
+        {
+            "claude.com",
+            "*.claude.com",
+            "downloads.claude.ai"
+        };
+
+        var legacyDomains = new[]
+        {
+            "claude.ai",
+            "*.claude.ai",
+            "anthropic.com",
+            "*.anthropic.com",
+            "api.anthropic.com",
+            "console.anthropic.com"
+        };
+
+        claudeDomains.Except(legacyDomains, StringComparer.OrdinalIgnoreCase)
+            .Should().BeEquivalentTo(approvedDomains);
+        bundleDomains.Should().Contain(approvedDomains);
+        claudeDomains.Should().NotContain(new[]
+        {
+            "sentry.io",
+            "datadoghq.com",
+            "*.datadoghq.com"
+        });
+    }
 }
