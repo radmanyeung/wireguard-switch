@@ -1,0 +1,57 @@
+===== snapshot: tunnel-started  2026-07-26 02:11:35 =====
+--- /var/run/wireguard ---
+utun7.sock
+wgst-split.name
+--- wg-show ---
+Unable to access interface utun7: Permission denied
+--- default routes ---
+default            192.168.1.1        UGScg                 en0       
+default            link#25            UCSIg               utun4       
+--- utun routes ---
+default            link#25            UCSIg               utun4       
+10.5.0.2           10.5.0.2           UH                  utun7       
+13.226.68.238      utun7              UHS                 utun7       
+35.190.46.17       utun7              UHS                 utun7       
+74.125.23.84       utun7              UHS                 utun7       
+100.64/10          link#25            UCS                 utun4       
+100.65.169.22      link#25            UHWIi               utun4       
+100.100.43.63      100.100.43.63      UH                  utun4       
+100.100.100.100/32 link#25            UCS                 utun4       
+100.100.100.100    link#25            UHWIi               utun4       
+104.18.32.47       utun7              UHS                 utun7       
+104.18.33.45       utun7              UHS                 utun7       
+104.18.41.158      utun7              UHS                 utun7       
+104.18.41.241      utun7              UHS                 utun7       
+104.18.43.204      utun7              UHS                 utun7       
+104.18.94.41       utun7              UHS                 utun7       
+104.18.95.41       utun7              UHS                 utun7       
+142.250.71.174     utun7              UHS                 utun7       
+142.250.198.142    utun7              UHS                 utun7       
+142.250.199.238    utun7              UHS                 utun7       
+142.251.150.2      utun7              UHS                 utun7       
+142.251.151.2      utun7              UHS                 utun7       
+142.251.152.2      utun7              UHS                 utun7       
+142.251.153.2      utun7              UHS                 utun7       
+142.251.154.2      utun7              UHS                 utun7       
+142.251.155.2      utun7              UHS                 utun7       
+142.251.156.2      utun7              UHS                 utun7       
+142.251.157.2      utun7              UHS                 utun7       
+160.79.104.10      utun7              UHS                 utun7       
+162.159.140.245    utun7              UHS                 utun7       
+172.64.144.52      utun7              UHS                 utun7       
+172.64.146.15      utun7              UHS                 utun7       
+172.64.146.98      utun7              UHS                 utun7       
+172.64.154.211     utun7              UHS                 utun7       
+172.64.155.209     utun7              UHS                 utun7       
+172.66.0.243       utun7              UHS                 utun7       
+172.217.112.4      utun7              UHS                 utun7       
+172.217.113.4      utun7              UHS                 utun7       
+172.217.114.4      utun7              UHS                 utun7       
+172.217.115.4      utun7              UHS                 utun7       
+172.217.116.4      utun7              UHS                 utun7       
+172.217.117.4      utun7              UHS                 utun7       
+172.217.118.4      utun7              UHS                 utun7       
+172.217.119.4      utun7              UHS                 utun7       
+224.0.0/4          link#25            UmCSI               utun4       
+255.255.255.255/32 link#25            UCSI                utun4       
+--- utun interfaces (inet) ---

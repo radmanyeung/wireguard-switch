@@ -1,0 +1,16 @@
+===== snapshot: after-quit  2026-07-26 02:15:27 =====
+--- /var/run/wireguard ---
+--- wg-show ---
+--- default routes ---
+default            192.168.1.1        UGScg                 en0       
+default            link#25            UCSIg               utun4       
+--- utun routes ---
+default            link#25            UCSIg               utun4       
+100.64/10          link#25            UCS                 utun4       
+100.65.169.22      link#25            UHWIi               utun4       
+100.100.43.63      100.100.43.63      UH                  utun4       
+100.100.100.100/32 link#25            UCS                 utun4       
+100.100.100.100    link#25            UHWIi               utun4       
+224.0.0/4          link#25            UmCSI               utun4       
+255.255.255.255/32 link#25            UCSI                utun4       
+--- utun interfaces (inet) ---
