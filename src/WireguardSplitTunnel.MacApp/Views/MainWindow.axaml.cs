@@ -289,7 +289,10 @@ public partial class MainWindow : Window
             File.Exists(splitConfigPath) ? splitConfigPath : null,
             appState.ActiveRawTunnelName,
             selectedConfigPath);
-        if (targets.Count == 0 && appState.RawTunnelDnsCleanupDebt is null)
+        var managedRoutes = appState.ManagedRouteSnapshot.ToList();
+        if (targets.Count == 0
+            && managedRoutes.Count == 0
+            && appState.RawTunnelDnsCleanupDebt is null)
         {
             Log("nothing to disable.");
             return;
@@ -317,6 +320,7 @@ public partial class MainWindow : Window
                     SplitConfigPath = splitTarget,
                     RawTunnelName = rawTarget,
                     AdditionalTunnelTargets = additionalTargets,
+                    ManagedRoutesToRemove = managedRoutes,
                     DnsRestorePlan = await BuildDnsRestorePlanAsync(ct)
                 };
                 var result = await MacExitCleanupService.RunAsync(

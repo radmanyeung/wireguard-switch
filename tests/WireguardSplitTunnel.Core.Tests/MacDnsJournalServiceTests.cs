@@ -1,10 +1,15 @@
 using System.Text;
 using FluentAssertions;
 using WireguardSplitTunnel.Core.Models;
+using WireguardSplitTunnel.Core.Platform;
 using WireguardSplitTunnel.Core.Services;
 
 namespace WireguardSplitTunnel.Core.Tests;
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Interoperability",
+    "CA1416:Validate platform compatibility",
+    Justification = "These tests exercise platform-neutral script composition helpers without executing macOS commands.")]
 public sealed class MacDnsJournalServiceTests
 {
     private const string JournalPath =
@@ -25,6 +30,65 @@ public sealed class MacDnsJournalServiceTests
         script.Should().Contain($"/bin/mv -f \"$journal_tmp\" \"{JournalPath}\"");
         script.Should().Contain("/bin/sync");
         script.Should().NotContain("PrivateKey");
+    }
+
+    [Fact]
+    public void BuildCaptureScript_ExplicitlyChecksEnumerationAndRejectsEmptyServiceData()
+    {
+        var script = MacDnsJournalService.BuildCaptureScript(JournalPath);
+
+        script.Should().Contain(
+            "if ! journal_services=$(/usr/sbin/networksetup -listallnetworkservices); then");
+        script.Should().NotContain("< <(");
+        (script.Split(
+                "[[ -n \"$journal_services\" ]] || exit 1",
+                StringSplitOptions.None).Length - 1)
+            .Should().Be(2);
+
+        var enumerate = script.IndexOf(
+            "journal_services=$(/usr/sbin/networksetup -listallnetworkservices)",
+            StringComparison.Ordinal);
+        var loop = script.IndexOf(
+            "while IFS= read -r journal_service",
+            StringComparison.Ordinal);
+        var publish = script.IndexOf("/bin/mv -f", StringComparison.Ordinal);
+        enumerate.Should().BeLessThan(loop);
+        loop.Should().BeLessThan(publish);
+    }
+
+    [Fact]
+    public void BuildCaptureScript_AllEncodingPipelinesFailClosedBeforePublishAndTunnelUp()
+    {
+        var capture = MacDnsJournalService.BuildCaptureScript(JournalPath);
+        var executable = MacAdminShell.BuildScriptContent(
+            capture + "/opt/homebrew/bin/wg-quick up \"/config/SG.conf\"\n");
+
+        var setE = executable.IndexOf("set -e", StringComparison.Ordinal);
+        var pipefail = executable.IndexOf("set -o pipefail", StringComparison.Ordinal);
+        var serviceEncoding = executable.IndexOf(
+            "journal_service_b64=$(/usr/bin/printf",
+            StringComparison.Ordinal);
+        var dnsEncoding = executable.IndexOf(
+            "journal_dns_b64=$(/usr/bin/printf",
+            StringComparison.Ordinal);
+        var searchEncoding = executable.IndexOf(
+            "journal_search_b64=$(/usr/bin/printf",
+            StringComparison.Ordinal);
+        var publish = executable.IndexOf("/bin/mv -f", StringComparison.Ordinal);
+        var up = executable.IndexOf("wg-quick up", StringComparison.Ordinal);
+
+        executable.Should().Contain(
+            "if ! journal_service_b64=$(/usr/bin/printf");
+        executable.Should().Contain(
+            "if ! journal_dns_b64=$(/usr/bin/printf");
+        executable.Should().Contain(
+            "if ! journal_search_b64=$(/usr/bin/printf");
+        setE.Should().BeLessThan(pipefail);
+        pipefail.Should().BeLessThan(serviceEncoding);
+        serviceEncoding.Should().BeLessThan(dnsEncoding);
+        dnsEncoding.Should().BeLessThan(searchEncoding);
+        searchEncoding.Should().BeLessThan(publish);
+        publish.Should().BeLessThan(up);
     }
 
     [Fact]

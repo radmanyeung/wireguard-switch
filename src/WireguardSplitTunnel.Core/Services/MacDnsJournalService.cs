@@ -34,21 +34,34 @@ public static class MacDnsJournalService
         var quotedTemplate = ShellQuoting.Quote(journalPath + ".tmp.XXXXXX");
         var script = new StringBuilder();
 
+        script.AppendLine("set -o pipefail");
         script.AppendLine("umask 077");
         script.AppendLine($"journal_tmp=$(/usr/bin/mktemp {quotedTemplate})");
         script.AppendLine("trap '/bin/rm -f \"$journal_tmp\"' EXIT");
         script.AppendLine("/bin/chmod 0600 \"$journal_tmp\"");
         script.AppendLine($"/usr/bin/printf '%s\\n' '{Header}' > \"$journal_tmp\"");
+        script.AppendLine("if ! journal_services=$(/usr/sbin/networksetup -listallnetworkservices); then");
+        script.AppendLine("  exit 1");
+        script.AppendLine("fi");
+        script.AppendLine("[[ -n \"$journal_services\" ]] || exit 1");
+        script.AppendLine("journal_services=$(/usr/bin/printf '%s\\n' \"$journal_services\" | /usr/bin/tail -n +2)");
+        script.AppendLine("[[ -n \"$journal_services\" ]] || exit 1");
         script.AppendLine("while IFS= read -r journal_service; do");
         script.AppendLine("  journal_service=$(/usr/bin/printf '%s' \"$journal_service\" | /usr/bin/sed 's/^[*[:space:]]*//; s/[[:space:]]*$//')");
         script.AppendLine("  [[ -n \"$journal_service\" ]] || continue");
         script.AppendLine("  journal_dns=$(/usr/sbin/networksetup -getdnsservers \"$journal_service\")");
         script.AppendLine("  journal_search=$(/usr/sbin/networksetup -getsearchdomains \"$journal_service\")");
-        script.AppendLine("  journal_service_b64=$(/usr/bin/printf '%s' \"$journal_service\" | /usr/bin/base64 | /usr/bin/tr -d '\\n')");
-        script.AppendLine("  journal_dns_b64=$(/usr/bin/printf '%s' \"$journal_dns\" | /usr/bin/base64 | /usr/bin/tr -d '\\n')");
-        script.AppendLine("  journal_search_b64=$(/usr/bin/printf '%s' \"$journal_search\" | /usr/bin/base64 | /usr/bin/tr -d '\\n')");
+        AppendCheckedEncoding(
+            "journal_service_b64",
+            "journal_service");
+        AppendCheckedEncoding(
+            "journal_dns_b64",
+            "journal_dns");
+        AppendCheckedEncoding(
+            "journal_search_b64",
+            "journal_search");
         script.AppendLine("  /usr/bin/printf '%s\\t%s\\t%s\\n' \"$journal_service_b64\" \"$journal_dns_b64\" \"$journal_search_b64\" >> \"$journal_tmp\"");
-        script.AppendLine("done < <(/usr/sbin/networksetup -listallnetworkservices | /usr/bin/tail -n +2)");
+        script.AppendLine("done <<< \"$journal_services\"");
         script.AppendLine($"journal_uid=$(/usr/bin/stat -f '%u' {quotedDirectory})");
         script.AppendLine($"journal_gid=$(/usr/bin/stat -f '%g' {quotedDirectory})");
         script.AppendLine("/usr/sbin/chown \"$journal_uid:$journal_gid\" \"$journal_tmp\"");
@@ -57,6 +70,13 @@ public static class MacDnsJournalService
         script.AppendLine("/bin/sync");
         script.AppendLine("trap - EXIT");
         return script.ToString();
+
+        void AppendCheckedEncoding(string outputVariable, string inputVariable)
+        {
+            script.AppendLine($"  if ! {outputVariable}=$(/usr/bin/printf '%s' \"${inputVariable}\" | /usr/bin/base64 | /usr/bin/tr -d '\\n'); then");
+            script.AppendLine("    exit 1");
+            script.AppendLine("  fi");
+        }
     }
 
     public static IReadOnlyList<MacDnsServiceSnapshot> ParseJournal(string journalContent)

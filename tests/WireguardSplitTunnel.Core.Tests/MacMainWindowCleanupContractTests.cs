@@ -38,6 +38,32 @@ public sealed class MacMainWindowCleanupContractTests
         source.Should().Contain("ActiveSplitTunnelConfigPath = splitConfigPath");
     }
 
+    [Fact]
+    public void ManualDisable_IncludesManagedRoutesWithTunnelWorkAndRouteDebtPreventsEarlyReturn()
+    {
+        var source = ReadRepositoryFile(
+            "src/WireguardSplitTunnel.MacApp/Views/MainWindow.axaml.cs");
+        var disableMethod = source[
+            source.IndexOf("private async void OnDisableTunnelClick", StringComparison.Ordinal)
+            ..source.IndexOf("private void OnRefreshStatusClick", StringComparison.Ordinal)];
+
+        disableMethod.Should().Contain(
+            "var managedRoutes = appState.ManagedRouteSnapshot.ToList();");
+        disableMethod.Should().Contain(
+            "if (targets.Count == 0\n"
+            + "            && managedRoutes.Count == 0\n"
+            + "            && appState.RawTunnelDnsCleanupDebt is null)");
+
+        var request = disableMethod[
+            disableMethod.IndexOf("var request = new MacCleanupRequest", StringComparison.Ordinal)
+            ..disableMethod.IndexOf(
+                "var result = await MacExitCleanupService.RunAsync",
+                StringComparison.Ordinal)];
+        request.Should().Contain("SplitConfigPath = splitTarget");
+        request.Should().Contain("RawTunnelName = rawTarget");
+        request.Should().Contain("ManagedRoutesToRemove = managedRoutes");
+    }
+
     private static string ReadRepositoryFile(string relativePath)
     {
         var root = FindRepositoryRoot();
