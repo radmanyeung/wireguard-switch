@@ -112,6 +112,48 @@ public sealed class MacDnsRepairServiceTests
         plan.ServicesResolvedWithoutRestore.Should().Equal("Wi-Fi");
     }
 
+    [Fact]
+    public void PlanSnapshotRestore_MixedRetry_RestoresOnlyStillTunnelOwnedSearchDomains()
+    {
+        var before = new MacDnsServiceSnapshot("Wi-Fi", ["1.1.1.1"], ["home.arpa"]);
+        var debt = CreateDebt(before with { RestoreDnsServersPending = false });
+        var current = new Dictionary<string, MacDnsServiceSnapshot>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Wi-Fi"] = new("Wi-Fi", ["1.1.1.1"], ["tailnet.ts.net"])
+        };
+
+        var plan = MacDnsRepairService.PlanSnapshotRestore(debt, current);
+
+        plan.DnsServersToRestore.Should().BeEmpty();
+        plan.SearchDomainsToRestore.Should().Equal(before with { RestoreDnsServersPending = false });
+    }
+
+    [Fact]
+    public void PlanSnapshotRestore_OrderOnlyDifference_IsNotCollapsedAsSetEquality()
+    {
+        var before = new MacDnsServiceSnapshot(
+            "Wi-Fi",
+            ["103.86.99.100", "103.86.96.100"],
+            ["tailnet.ts.net"]);
+        var debt = new MacRawTunnelDnsCleanupDebt(
+            "SG",
+            "/opt/homebrew/etc/wireguard/SG.conf",
+            ["103.86.96.100", "103.86.99.100"],
+            ["tailnet.ts.net"],
+            [before]);
+        var current = new Dictionary<string, MacDnsServiceSnapshot>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Wi-Fi"] = new(
+                "Wi-Fi",
+                ["103.86.96.100", "103.86.99.100"],
+                ["tailnet.ts.net"])
+        };
+
+        var plan = MacDnsRepairService.PlanSnapshotRestore(debt, current);
+
+        plan.DnsServersToRestore.Should().Equal(before);
+    }
+
     private static MacRawTunnelDnsCleanupDebt CreateDebt(MacDnsServiceSnapshot snapshot) =>
         new(
             "SG",

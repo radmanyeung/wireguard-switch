@@ -36,12 +36,17 @@ public sealed record AppState(
         MacDomainProfileAssignments ?? [];
 }
 
-public sealed record ManagedRouteEntry(string Domain, string IpAddress);
+public sealed record ManagedRouteEntry(
+    string Domain,
+    string IpAddress,
+    string? InterfaceName = null);
 
 public sealed record MacDnsServiceSnapshot(
     string ServiceName,
     List<string>? DnsServers = null,
-    List<string>? SearchDomains = null)
+    List<string>? SearchDomains = null,
+    bool RestoreDnsServersPending = true,
+    bool RestoreSearchDomainsPending = true)
 {
     public List<string> DnsServers { get; init; } = DnsServers ?? [];
     public List<string> SearchDomains { get; init; } = SearchDomains ?? [];
@@ -52,7 +57,8 @@ public sealed record MacRawTunnelDnsCleanupDebt(
     string ConfigPath,
     List<string>? TunnelDnsServers = null,
     List<string>? TunnelSearchDomains = null,
-    List<MacDnsServiceSnapshot>? Services = null)
+    List<MacDnsServiceSnapshot>? Services = null,
+    string? JournalPath = null)
 {
     public List<string> TunnelDnsServers { get; init; } = TunnelDnsServers ?? [];
     public List<string> TunnelSearchDomains { get; init; } = TunnelSearchDomains ?? [];

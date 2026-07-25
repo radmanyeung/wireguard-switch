@@ -226,14 +226,15 @@ public partial class MainWindow : Window
                 var rawTunnelName = WireguardConfigCatalog.GetTunnelName(rawConfigPath);
                 var configText = await File.ReadAllTextAsync(rawConfigPath, ct);
                 MacRawTunnelDnsCleanupDebt? dnsDebt = null;
+                string? dnsJournalPath = null;
                 if (MacSplitTunnelConfigService.ExtractDnsServers(configText).Count > 0)
                 {
-                    var beforeDns = await MacDnsRepairService.CaptureSnapshotAsync(ct);
-                    dnsDebt = MacDnsRepairService.CreateCleanupDebt(
+                    dnsJournalPath = MacDnsJournalService.CreateJournalPath(GetDataDirectory());
+                    dnsDebt = MacDnsRepairService.CreatePendingCleanupDebt(
                         rawTunnelName,
                         rawConfigPath,
                         configText,
-                        beforeDns);
+                        dnsJournalPath);
                 }
 
                 // Persist cleanup provenance before elevation so a crash after
@@ -244,26 +245,27 @@ public partial class MainWindow : Window
                     RawTunnelDnsCleanupDebt = dnsDebt
                 };
                 SaveState();
-                await tunnelControl.InstallAndStartAsync(rawConfigPath, ct);
+                await tunnelControl.InstallAndStartAsync(rawConfigPath, dnsJournalPath, ct);
 
-                if (dnsDebt is not null)
+                if (dnsDebt is not null && dnsJournalPath is not null)
                 {
                     try
                     {
-                        var afterDns = await MacDnsRepairService.CaptureSnapshotAsync(ct);
+                        var journalContent = await File.ReadAllTextAsync(dnsJournalPath, ct);
                         appState = appState with
                         {
-                            RawTunnelDnsCleanupDebt = MacDnsRepairService.RefineCleanupDebtAfterStart(
+                            RawTunnelDnsCleanupDebt = MacDnsJournalService.RecoverDebt(
                                 dnsDebt,
-                                MacDnsRepairService.ToSnapshotMap(afterDns))
+                                journalContent,
+                                MacTunnelNameResolver.GetExactMappingPresence(rawTunnelName))
                         };
                         SaveState();
                     }
                     catch (Exception ex)
                     {
-                        // The complete pre-start snapshot is already durable;
-                        // keeping it is safer than guessing after a read failure.
-                        Log($"DNS cleanup snapshot kept for recovery: {ToFriendlyMacError(ex.Message)}");
+                        // The elevated transaction made the journal durable
+                        // before wg-quick up. Keep its path for startup recovery.
+                        Log($"DNS cleanup journal kept for recovery: {ToFriendlyMacError(ex.Message)}");
                     }
                 }
 
@@ -422,15 +424,12 @@ public partial class MainWindow : Window
 
     private async void OnRestoreNormalRoutesClick(object? sender, RoutedEventArgs e)
     {
-        var managedIps = appState.ManagedRouteSnapshot
-            .Select(entry => entry.IpAddress)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var managedRoutes = appState.ManagedRouteSnapshot.ToList();
 
         await RunGuardedAsync("restore normal routes", async ct =>
         {
             var dnsRestorePlan = await BuildDnsRestorePlanAsync(ct);
-            if (managedIps.Count == 0
+            if (managedRoutes.Count == 0
                 && dnsRestorePlan.ServicesToRestore.Count == 0
                 && dnsRestorePlan.ServicesResolvedWithoutRestore.Count == 0)
             {
@@ -442,7 +441,7 @@ public partial class MainWindow : Window
 
             var request = new MacCleanupRequest
             {
-                ManagedIpsToRemove = managedIps,
+                ManagedRoutesToRemove = managedRoutes,
                 DnsRestorePlan = dnsRestorePlan
             };
             var result = await MacExitCleanupService.RunAsync(
@@ -910,7 +909,10 @@ public partial class MainWindow : Window
             .ToList();
         var coordinator = new RuleResolutionCoordinator(resolver);
         var resolvedRules = await coordinator.ResolveEnabledRulesAsync(enabledRules, ct);
-        var plan = DomainRouteApplyPlanner.Build(appState.ManagedRouteSnapshot, resolvedRules);
+        var plan = DomainRouteApplyPlanner.Build(
+            appState.ManagedRouteSnapshot,
+            resolvedRules,
+            iface);
 
         await routeService.ApplyAsync(iface, plan.ToAdd, plan.ToRemove, ct);
         ResolutionStateUpdater.Apply(appState, resolvedRules);
@@ -1057,8 +1059,40 @@ public partial class MainWindow : Window
             SaveState();
         }
 
+        HydrateDnsCleanupDebtFromJournal();
         ReconcileRawTunnel();
         ReconcileDnsCleanupDebt();
+    }
+
+    private void HydrateDnsCleanupDebtFromJournal()
+    {
+        var debt = appState.RawTunnelDnsCleanupDebt;
+        if (debt is null || string.IsNullOrWhiteSpace(debt.JournalPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var journalContent = File.Exists(debt.JournalPath)
+                ? File.ReadAllText(debt.JournalPath)
+                : null;
+            var recovered = MacDnsJournalService.RecoverDebt(
+                debt,
+                journalContent,
+                MacTunnelNameResolver.GetExactMappingPresence(debt.TunnelName));
+            if (!Equals(recovered, debt))
+            {
+                appState = appState with { RawTunnelDnsCleanupDebt = recovered };
+                SaveState();
+            }
+        }
+        catch (Exception ex)
+        {
+            // Malformed or unreadable journals remain conservative debt; no
+            // resolver values are guessed or restored from a partial record.
+            Log($"saved DNS cleanup journal could not be read; keeping it for retry: {ToFriendlyMacError(ex.Message)}");
+        }
     }
 
     private void ReconcileDnsCleanupDebt()
@@ -1174,8 +1208,13 @@ public partial class MainWindow : Window
 
     private void ApplyCleanupResult(MacCleanupRequest request, MacCleanupResult result)
     {
+        var journalPath = appState.RawTunnelDnsCleanupDebt?.JournalPath;
         appState = MacCleanupStateReducer.Apply(appState, request, result);
         SaveState();
+        if (appState.RawTunnelDnsCleanupDebt is null)
+        {
+            MacDnsJournalService.TryDeleteJournal(journalPath);
+        }
     }
 
     private void LogCleanupOutcome(MacCleanupRequest request, MacCleanupResult result)
@@ -1194,13 +1233,19 @@ public partial class MainWindow : Window
             (result.SplitTunnelStopped ? 1 : 0)
             + (result.RawTunnelStopped ? 1 : 0)
             + result.AdditionalTunnelTargetsStopped.Count;
-        var requestedDnsRestores = request.DnsRestorePlan.ServicesToRestore.Count;
+        var requestedDnsRestores = request.DnsRestorePlan.DnsServersToRestore.Count
+            + request.DnsRestorePlan.SearchDomainsToRestore.Count;
+        var successfulDnsRestores = result.RestoredDnsServerServices.Count
+            + result.RestoredSearchDomainServices.Count;
+        var resolvedRoutes = result.DeletedManagedRoutes.Count
+            + result.AlreadyAbsentManagedRoutes.Count
+            + result.ReplacedManagedRoutes.Count;
         var unresolved = successfulTunnelStops < requestedTunnelStops
-            || result.RemovedManagedIps.Count < request.ManagedIpsToRemove.Count
-            || result.RestoredDnsServices.Count < requestedDnsRestores
+            || resolvedRoutes < request.ManagedRoutesToRemove.Count
+            || successfulDnsRestores < requestedDnsRestores
             || !result.BatchCompleted;
 
-        Log($"cleanup: stopped {successfulTunnelStops}/{requestedTunnelStops} tunnel target(s), removed {result.RemovedManagedIps.Count}/{request.ManagedIpsToRemove.Count} route(s), restored {result.RestoredDnsServices.Count}/{requestedDnsRestores} DNS service(s).");
+        Log($"cleanup: stopped {successfulTunnelStops}/{requestedTunnelStops} tunnel target(s), reconciled {resolvedRoutes}/{request.ManagedRoutesToRemove.Count} route(s), restored {successfulDnsRestores}/{requestedDnsRestores} DNS component(s).");
         if (unresolved)
         {
             Log("cleanup incomplete; remaining app-owned state was saved for retry.");
@@ -1271,10 +1316,7 @@ public partial class MainWindow : Window
             var rawTunnelPossiblyUp = !string.IsNullOrWhiteSpace(rawTunnelName)
                 && MacTunnelLifecyclePlanner.ShouldAttemptCleanup(
                     MacTunnelNameResolver.GetExactMappingPresence(rawTunnelName!));
-            var managedIps = appState.ManagedRouteSnapshot
-                .Select(entry => entry.IpAddress)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var managedRoutes = appState.ManagedRouteSnapshot.ToList();
             var dnsRestorePlan = await BuildDnsRestorePlanAsync(cts.Token);
 
             Log("restoring normal routing before quitting...");
@@ -1286,7 +1328,7 @@ public partial class MainWindow : Window
                     ? splitConfigPath
                     : null,
                 RawTunnelName = rawTunnelPossiblyUp ? rawTunnelName : null,
-                ManagedIpsToRemove = managedIps,
+                ManagedRoutesToRemove = managedRoutes,
                 DnsRestorePlan = dnsRestorePlan
             };
             var result = await MacExitCleanupService.RunAsync(

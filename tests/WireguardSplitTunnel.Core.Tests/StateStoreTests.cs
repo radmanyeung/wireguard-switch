@@ -178,12 +178,82 @@ public sealed class StateStoreTests
     }
 
     [Fact]
+    public void SaveAndLoad_RoundTripsPendingDnsJournalPathAndComponentDebt()
+    {
+        var path = CreateTestPath();
+        var store = new StateStore(path);
+        var journalPath = path + ".dns-journal";
+        var debt = new MacRawTunnelDnsCleanupDebt(
+            "SG",
+            "/opt/homebrew/etc/wireguard/SG.conf",
+            ["103.86.96.100"],
+            ["tailnet.ts.net"],
+            [new MacDnsServiceSnapshot(
+                "Wi-Fi",
+                ["1.1.1.1"],
+                ["home.arpa"],
+                RestoreDnsServersPending: false)],
+            journalPath);
+
+        store.Save(new AppState([], [], []) with { RawTunnelDnsCleanupDebt = debt });
+
+        store.Load().RawTunnelDnsCleanupDebt.Should().BeEquivalentTo(debt);
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_OldStateFileWithoutRawDnsCleanupDebt_DefaultsToNull()
     {
         var path = CreateTestPath();
         File.WriteAllText(path, """{ "DomainRules": [] }""");
 
         new StateStore(path).Load().RawTunnelDnsCleanupDebt.Should().BeNull();
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_LegacyMacCleanupState_PreservesUnknownRouteAndBothDnsComponents()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, """
+            {
+              "DomainRules": [],
+              "LastKnownResolvedIps": {},
+              "ManagedRouteSnapshot": [
+                { "Domain": "legacy.example", "IpAddress": "198.51.100.10" }
+              ],
+              "RawTunnelDnsCleanupDebt": {
+                "TunnelName": "SG",
+                "ConfigPath": "/opt/homebrew/etc/wireguard/SG.conf",
+                "TunnelDnsServers": ["103.86.96.100"],
+                "TunnelSearchDomains": ["tailnet.ts.net"],
+                "Services": [
+                  {
+                    "ServiceName": "Wi-Fi",
+                    "DnsServers": ["1.1.1.1"],
+                    "SearchDomains": ["home.arpa"]
+                  }
+                ]
+              }
+            }
+            """);
+
+        var state = new StateStore(path).Load();
+
+        state.ManagedRouteSnapshot.Should().ContainSingle()
+            .Which.InterfaceName.Should().BeNull();
+        state.RawTunnelDnsCleanupDebt!.Services.Should().ContainSingle()
+            .Which.Should().Match<MacDnsServiceSnapshot>(snapshot =>
+                snapshot.RestoreDnsServersPending
+                && snapshot.RestoreSearchDomainsPending);
 
         if (File.Exists(path))
         {

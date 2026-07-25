@@ -9,8 +9,22 @@ public sealed record MacDnsRestorePlan
 {
     public string? TunnelName { get; init; }
     public string? ConfigPath { get; init; }
-    public IReadOnlyList<MacDnsServiceSnapshot> ServicesToRestore { get; init; } = [];
-    public IReadOnlyList<string> ServicesResolvedWithoutRestore { get; init; } = [];
+    public IReadOnlyList<MacDnsServiceSnapshot> DnsServersToRestore { get; init; } = [];
+    public IReadOnlyList<MacDnsServiceSnapshot> SearchDomainsToRestore { get; init; } = [];
+    public IReadOnlyList<string> DnsServerServicesResolvedWithoutRestore { get; init; } = [];
+    public IReadOnlyList<string> SearchDomainServicesResolvedWithoutRestore { get; init; } = [];
+
+    public IReadOnlyList<MacDnsServiceSnapshot> ServicesToRestore =>
+        DnsServersToRestore
+            .Concat(SearchDomainsToRestore)
+            .DistinctBy(snapshot => snapshot.ServiceName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    public IReadOnlyList<string> ServicesResolvedWithoutRestore =>
+        DnsServerServicesResolvedWithoutRestore
+            .Concat(SearchDomainServicesResolvedWithoutRestore)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 }
 
 /// <summary>
@@ -51,11 +65,9 @@ public static class MacDnsRepairService
         var dnsEntries = MacSplitTunnelConfigService.ExtractDnsServers(configText);
         var dnsServers = dnsEntries
             .Where(entry => IPAddress.TryParse(entry, out _))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var searchDomains = dnsEntries
             .Where(entry => !IPAddress.TryParse(entry, out _))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (dnsServers.Count == 0 && searchDomains.Count == 0)
@@ -71,6 +83,16 @@ public static class MacDnsRepairService
             before.Select(NormalizeSnapshot).ToList());
     }
 
+    public static MacRawTunnelDnsCleanupDebt? CreatePendingCleanupDebt(
+        string tunnelName,
+        string configPath,
+        string configText,
+        string journalPath)
+    {
+        var debt = CreateCleanupDebt(tunnelName, configPath, configText, []);
+        return debt is null ? null : debt with { JournalPath = journalPath };
+    }
+
     public static MacDnsRestorePlan PlanSnapshotRestore(
         MacRawTunnelDnsCleanupDebt? debt,
         IReadOnlyDictionary<string, MacDnsServiceSnapshot>? currentDnsByService)
@@ -82,12 +104,12 @@ public static class MacDnsRepairService
 
         ArgumentNullException.ThrowIfNull(currentDnsByService);
 
-        var tunnelState = new MacDnsServiceSnapshot(
-            string.Empty,
-            debt.TunnelDnsServers,
-            debt.TunnelSearchDomains);
-        var restore = new List<MacDnsServiceSnapshot>();
-        var resolved = new List<string>();
+        var tunnelDnsServers = NormalizeDnsSequence(debt.TunnelDnsServers);
+        var tunnelSearchDomains = NormalizeSearchDomainSequence(debt.TunnelSearchDomains);
+        var dnsRestore = new List<MacDnsServiceSnapshot>();
+        var searchRestore = new List<MacDnsServiceSnapshot>();
+        var dnsResolved = new List<string>();
+        var searchResolved = new List<string>();
 
         foreach (var before in debt.Services)
         {
@@ -98,27 +120,63 @@ public static class MacDnsRepairService
                 continue;
             }
 
-            if (SnapshotsEqual(before, tunnelState)
-                || SnapshotsEqual(current, before)
-                || !SnapshotsEqual(current, tunnelState))
+            var normalizedBefore = NormalizeSnapshot(before);
+            var normalizedCurrent = NormalizeSnapshot(current);
+
+            if (before.RestoreDnsServersPending)
             {
-                // Either the matching DNS pre-dated this app, wg-quick already
-                // restored it, or another owner (for example MagicDNS) has
-                // replaced it. None of those states belongs to this app now.
-                resolved.Add(before.ServiceName);
-                continue;
+                PlanComponent(
+                    before.ServiceName,
+                    normalizedBefore.DnsServers,
+                    normalizedCurrent.DnsServers,
+                    tunnelDnsServers,
+                    before,
+                    dnsRestore,
+                    dnsResolved);
             }
 
-            restore.Add(before);
+            if (before.RestoreSearchDomainsPending)
+            {
+                PlanComponent(
+                    before.ServiceName,
+                    normalizedBefore.SearchDomains,
+                    normalizedCurrent.SearchDomains,
+                    tunnelSearchDomains,
+                    before,
+                    searchRestore,
+                    searchResolved);
+            }
         }
 
         return new MacDnsRestorePlan
         {
             TunnelName = debt.TunnelName,
             ConfigPath = debt.ConfigPath,
-            ServicesToRestore = restore,
-            ServicesResolvedWithoutRestore = resolved
+            DnsServersToRestore = dnsRestore,
+            SearchDomainsToRestore = searchRestore,
+            DnsServerServicesResolvedWithoutRestore = dnsResolved,
+            SearchDomainServicesResolvedWithoutRestore = searchResolved
         };
+
+        static void PlanComponent(
+            string serviceName,
+            IReadOnlyList<string> before,
+            IReadOnlyList<string> current,
+            IReadOnlyList<string> tunnel,
+            MacDnsServiceSnapshot snapshot,
+            ICollection<MacDnsServiceSnapshot> restore,
+            ICollection<string> resolved)
+        {
+            if (ResolverSequencesEqual(before, tunnel)
+                || ResolverSequencesEqual(current, before)
+                || !ResolverSequencesEqual(current, tunnel))
+            {
+                resolved.Add(serviceName);
+                return;
+            }
+
+            restore.Add(snapshot);
+        }
     }
 
     public static MacRawTunnelDnsCleanupDebt? RefineCleanupDebtAfterStart(
@@ -130,12 +188,24 @@ public static class MacDnsRepairService
             .Where(service => !currentDnsByService.ContainsKey(service.ServiceName))
             .Select(service => service.ServiceName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var keptNames = plan.ServicesToRestore
+        var dnsPendingNames = plan.DnsServersToRestore
             .Select(service => service.ServiceName)
-            .Concat(unresolvedNames)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var searchPendingNames = plan.SearchDomainsToRestore
+            .Select(service => service.ServiceName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var remaining = debt.Services
-            .Where(service => keptNames.Contains(service.ServiceName))
+            .Select(service => service with
+            {
+                RestoreDnsServersPending = service.RestoreDnsServersPending
+                    && (unresolvedNames.Contains(service.ServiceName)
+                        || dnsPendingNames.Contains(service.ServiceName)),
+                RestoreSearchDomainsPending = service.RestoreSearchDomainsPending
+                    && (unresolvedNames.Contains(service.ServiceName)
+                        || searchPendingNames.Contains(service.ServiceName))
+            })
+            .Where(service => service.RestoreDnsServersPending
+                              || service.RestoreSearchDomainsPending)
             .ToList();
 
         return remaining.Count == 0 ? null : debt with { Services = remaining };
@@ -203,19 +273,24 @@ public static class MacDnsRepairService
     private static MacDnsServiceSnapshot NormalizeSnapshot(MacDnsServiceSnapshot snapshot) =>
         snapshot with
         {
-            DnsServers = snapshot.DnsServers
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList(),
-            SearchDomains = snapshot.SearchDomains
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList()
+            DnsServers = NormalizeDnsSequence(snapshot.DnsServers).ToList(),
+            SearchDomains = NormalizeSearchDomainSequence(snapshot.SearchDomains).ToList()
         };
 
-    private static bool SnapshotsEqual(
-        MacDnsServiceSnapshot left,
-        MacDnsServiceSnapshot right) =>
-        left.DnsServers.ToHashSet(StringComparer.OrdinalIgnoreCase)
-            .SetEquals(right.DnsServers)
-        && left.SearchDomains.ToHashSet(StringComparer.OrdinalIgnoreCase)
-            .SetEquals(right.SearchDomains);
+    private static IReadOnlyList<string> NormalizeDnsSequence(IEnumerable<string> values) =>
+        values
+            .Select(value => IPAddress.TryParse(value.Trim(), out var address)
+                ? address.ToString()
+                : value.Trim())
+            .ToList();
+
+    private static IReadOnlyList<string> NormalizeSearchDomainSequence(IEnumerable<string> values) =>
+        values
+            .Select(value => value.Trim().TrimEnd('.').ToLowerInvariant())
+            .ToList();
+
+    private static bool ResolverSequencesEqual(
+        IReadOnlyList<string> left,
+        IReadOnlyList<string> right) =>
+        left.SequenceEqual(right, StringComparer.OrdinalIgnoreCase);
 }

@@ -11,7 +11,8 @@ public static class DomainRouteApplyPlanner
 {
     public static DomainRouteApplyPlan Build(
         IEnumerable<ManagedRouteEntry> previousSnapshot,
-        IEnumerable<ResolvedRule> resolvedRules)
+        IEnumerable<ResolvedRule> resolvedRules,
+        string? interfaceName = null)
     {
         var previousIps = previousSnapshot
             .Select(entry => entry.IpAddress)
@@ -19,7 +20,8 @@ public static class DomainRouteApplyPlanner
             .ToList();
 
         var snapshot = resolvedRules
-            .SelectMany(result => result.ResolvedIps.Select(ip => new ManagedRouteEntry(result.Rule.Domain, ip)))
+            .SelectMany(result => result.ResolvedIps.Select(ip =>
+                new ManagedRouteEntry(result.Rule.Domain, ip, interfaceName)))
             .GroupBy(entry => entry.IpAddress, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();

@@ -8,6 +8,10 @@ namespace WireguardSplitTunnel.Core.Services;
 public interface ITunnelControlService
 {
     Task InstallAndStartAsync(string configPath, CancellationToken cancellationToken);
+    Task InstallAndStartAsync(
+        string configPath,
+        string? dnsJournalPath,
+        CancellationToken cancellationToken);
     Task StopAndUninstallAsync(string tunnelName, CancellationToken cancellationToken);
 }
 
@@ -35,6 +39,12 @@ public sealed class TunnelControlService : ITunnelControlService
     public Task InstallAndStartAsync(string configPath, CancellationToken cancellationToken)
         => inner.InstallAndStartAsync(configPath, cancellationToken);
 
+    public Task InstallAndStartAsync(
+        string configPath,
+        string? dnsJournalPath,
+        CancellationToken cancellationToken) =>
+        inner.InstallAndStartAsync(configPath, dnsJournalPath, cancellationToken);
+
     public Task StopAndUninstallAsync(string tunnelName, CancellationToken cancellationToken)
         => inner.StopAndUninstallAsync(tunnelName, cancellationToken);
 }
@@ -53,6 +63,19 @@ internal sealed class WindowsTunnelControlService : ITunnelControlService
             ?? throw new FileNotFoundException("wireguard.exe not found. Please install WireGuard first.");
 
         return RunAsync(wireguardExe, WireguardConfigCatalog.BuildInstallTunnelArgs(configPath), cancellationToken);
+    }
+
+    public Task InstallAndStartAsync(
+        string configPath,
+        string? dnsJournalPath,
+        CancellationToken cancellationToken)
+    {
+        if (dnsJournalPath is not null)
+        {
+            throw new PlatformNotSupportedException("DNS startup journals are only supported on macOS.");
+        }
+
+        return InstallAndStartAsync(configPath, cancellationToken);
     }
 
     public Task StopAndUninstallAsync(string tunnelName, CancellationToken cancellationToken)
@@ -112,6 +135,12 @@ internal sealed class MacTunnelControlService : ITunnelControlService
     ];
 
     public Task InstallAndStartAsync(string configPath, CancellationToken cancellationToken)
+        => InstallAndStartAsync(configPath, dnsJournalPath: null, cancellationToken);
+
+    public Task InstallAndStartAsync(
+        string configPath,
+        string? dnsJournalPath,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath))
         {
@@ -119,7 +148,11 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         }
 
         var wgQuick = ResolveWgQuick();
-        var script = BuildInstallAndStartScript(wgQuick, configPath, DiscoverActiveTunnelNames());
+        var script = BuildInstallAndStartScript(
+            wgQuick,
+            configPath,
+            DiscoverActiveTunnelNames(),
+            dnsJournalPath);
 
         return RunBatchAsync(script.ToString(), "WireGuard split tunnel needs to start the tunnel", cancellationToken);
     }
@@ -162,7 +195,8 @@ internal sealed class MacTunnelControlService : ITunnelControlService
     internal static string BuildInstallAndStartScript(
         string wgQuick,
         string configPath,
-        IEnumerable<string> activeTunnelNames)
+        IEnumerable<string> activeTunnelNames,
+        string? dnsJournalPath = null)
     {
         var script = new StringBuilder();
         _ = activeTunnelNames;
@@ -171,6 +205,11 @@ internal sealed class MacTunnelControlService : ITunnelControlService
         // Do not stop unrelated active tunnels: users may already have the official
         // WireGuard app connected, and Start AI VPN should not break that tunnel.
         script.AppendLine($"{wgQuick} down {ShellQuote(configPath)} >/dev/null 2>&1 || true");
+        if (dnsJournalPath is not null)
+        {
+            script.Append(MacDnsJournalService.BuildCaptureScript(dnsJournalPath));
+        }
+
         script.AppendLine($"{wgQuick} up {ShellQuote(configPath)}");
         var tunnelName = WireguardConfigCatalog.GetTunnelName(configPath);
         var nameFile = MacTunnelNameResolver.GetNameFilePath(tunnelName);

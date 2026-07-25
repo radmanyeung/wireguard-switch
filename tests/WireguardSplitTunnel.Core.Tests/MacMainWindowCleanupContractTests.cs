@@ -17,6 +17,19 @@ public sealed class MacMainWindowCleanupContractTests
     }
 
     [Fact]
+    public void RawTunnelStart_UsesDurablePrivilegedJournalInsteadOfPrePromptSnapshot()
+    {
+        var source = ReadRepositoryFile(
+            "src/WireguardSplitTunnel.MacApp/Views/MainWindow.axaml.cs");
+
+        source.Should().Contain("MacDnsJournalService.CreateJournalPath");
+        source.Should().Contain("MacDnsRepairService.CreatePendingCleanupDebt");
+        source.Should().Contain("InstallAndStartAsync(rawConfigPath, dnsJournalPath, ct)");
+        source.Should().Contain("MacDnsJournalService.RecoverDebt");
+        source.Should().NotContain("MacDnsRepairService.RefineCleanupDebtAfterStart");
+    }
+
+    [Fact]
     public void SplitTunnelStart_PersistsExactGeneratedCleanupTarget()
     {
         var source = ReadRepositoryFile(

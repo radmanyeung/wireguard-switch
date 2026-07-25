@@ -16,26 +16,35 @@ public sealed class MacExitCleanupServiceTests
         {
             SplitConfigPath = "/data/wgst-split.conf",
             RawTunnelName = "SG",
-            ManagedIpsToRemove = ["1.2.3.4", "5.6.7.8"],
+            ManagedRoutesToRemove =
+            [
+                new ManagedRouteEntry("one.example", "1.2.3.4", "utun4"),
+                new ManagedRouteEntry("two.example", "5.6.7.8", "utun4")
+            ],
             DnsRestorePlan = new MacDnsRestorePlan
             {
                 TunnelName = "SG",
                 ConfigPath = "/config/SG.conf",
-                ServicesToRestore = [new MacDnsServiceSnapshot("Wi-Fi", [], [])]
+                DnsServersToRestore = [new MacDnsServiceSnapshot("Wi-Fi", [], [])],
+                SearchDomainsToRestore = [new MacDnsServiceSnapshot("Wi-Fi", [], [])]
             }
         };
 
         var batch = MacExitCleanupService.BuildCleanupBatch(WgQuick, request);
 
         batch.Operations.Select(operation => operation.Kind).Should().Equal(
+            MacCleanupOperationKind.ManagedRoute,
+            MacCleanupOperationKind.ManagedRoute,
             MacCleanupOperationKind.SplitTunnel,
             MacCleanupOperationKind.RawTunnel,
-            MacCleanupOperationKind.ManagedRoute,
-            MacCleanupOperationKind.ManagedRoute,
-            MacCleanupOperationKind.DnsService);
+            MacCleanupOperationKind.DnsServers,
+            MacCleanupOperationKind.SearchDomains);
         batch.Script.Should().Contain("\"/opt/homebrew/bin/wg-quick\" down \"/data/wgst-split.conf\"");
         batch.Script.Should().Contain("\"/opt/homebrew/bin/wg-quick\" down \"SG\"");
+        batch.Script.Should().Contain("/sbin/route -n get \"1.2.3.4\"");
         batch.Script.Should().Contain("/sbin/route -n delete -host \"1.2.3.4\"");
+        batch.Script.IndexOf("/sbin/route -n get", StringComparison.Ordinal)
+            .Should().BeLessThan(batch.Script.IndexOf("wg-quick", StringComparison.Ordinal));
         batch.Script.Should().Contain("/usr/sbin/networksetup -setdnsservers \"Wi-Fi\" Empty");
         batch.Script.Should().NotContain("|| true");
     }
@@ -58,7 +67,10 @@ public sealed class MacExitCleanupServiceTests
             {
                 SplitConfigPath = "/data/wgst-split.conf",
                 RawTunnelName = "SG",
-                ManagedIpsToRemove = ["1.2.3.4"]
+                ManagedRoutesToRemove =
+                [
+                    new ManagedRouteEntry("one.example", "1.2.3.4", "utun4")
+                ]
             });
 
         batch.Script.Should().NotContain("wg-quick");
@@ -77,7 +89,14 @@ public sealed class MacExitCleanupServiceTests
                 SplitConfigPath = "/Users/u/Application Support/wgst-split.conf",
                 DnsRestorePlan = new MacDnsRestorePlan
                 {
-                    ServicesToRestore =
+                    DnsServersToRestore =
+                    [
+                        new MacDnsServiceSnapshot(
+                            "My Service",
+                            ["1.1.1.1", "9.9.9.9"],
+                            ["home.arpa", "tailnet.ts.net"])
+                    ],
+                    SearchDomainsToRestore =
                     [
                         new MacDnsServiceSnapshot(
                             "My Service",
@@ -95,15 +114,64 @@ public sealed class MacExitCleanupServiceTests
     }
 
     [Fact]
+    public void BuildCleanupBatch_DnsAndSearchDomainsHaveIndependentOperations()
+    {
+        var snapshot = new MacDnsServiceSnapshot(
+            "Wi-Fi",
+            ["1.1.1.1"],
+            ["home.arpa"]);
+        var batch = MacExitCleanupService.BuildCleanupBatch(
+            WgQuick,
+            new MacCleanupRequest
+            {
+                DnsRestorePlan = new MacDnsRestorePlan
+                {
+                    DnsServersToRestore = [snapshot],
+                    SearchDomainsToRestore = [snapshot]
+                }
+            });
+
+        batch.Operations.Select(operation => operation.Kind).Should().Equal(
+            MacCleanupOperationKind.DnsServers,
+            MacCleanupOperationKind.SearchDomains);
+
+        var dns = batch.Operations[0];
+        var result = MacExitCleanupService.ParseCleanupResult(
+            new MacCleanupRequest
+            {
+                DnsRestorePlan = new MacDnsRestorePlan
+                {
+                    DnsServersToRestore = [snapshot],
+                    SearchDomainsToRestore = [snapshot]
+                }
+            },
+            batch,
+            new MacShellResult(1, dns.SuccessMarker, string.Empty));
+
+        result.RestoredDnsServerServices.Should().Equal("Wi-Fi");
+        result.RestoredSearchDomainServices.Should().BeEmpty();
+        result.BatchCompleted.Should().BeFalse();
+    }
+
+    [Fact]
     public void ParseCleanupResult_PartialMarkers_ReportOnlyExactSuccesses()
     {
         var request = new MacCleanupRequest
         {
             RawTunnelName = "SG",
-            ManagedIpsToRemove = ["1.2.3.4", "5.6.7.8"],
+            ManagedRoutesToRemove =
+            [
+                new ManagedRouteEntry("one.example", "1.2.3.4", "utun4"),
+                new ManagedRouteEntry("two.example", "5.6.7.8", "utun4")
+            ],
             DnsRestorePlan = new MacDnsRestorePlan
             {
-                ServicesToRestore =
+                DnsServersToRestore =
+                [
+                    new MacDnsServiceSnapshot("Wi-Fi", [], []),
+                    new MacDnsServiceSnapshot("Ethernet", [], [])
+                ],
+                SearchDomainsToRestore =
                 [
                     new MacDnsServiceSnapshot("Wi-Fi", [], []),
                     new MacDnsServiceSnapshot("Ethernet", [], [])
@@ -111,10 +179,15 @@ public sealed class MacExitCleanupServiceTests
             }
         };
         var batch = MacExitCleanupService.BuildCleanupBatch(WgQuick, request);
-        var successes = batch.Operations
-            .Where(operation =>
-                operation.Target is "1.2.3.4" or "Wi-Fi")
-            .Select(operation => operation.SuccessMarker);
+        var route = batch.Operations.Single(operation => operation.Target == "1.2.3.4");
+        var wifi = batch.Operations.Single(operation =>
+            operation.Target == "Wi-Fi"
+            && operation.Kind == MacCleanupOperationKind.DnsServers);
+        var successes = new[]
+        {
+            route.OutcomeMarker(MacManagedRouteCleanupDisposition.AlreadyAbsent),
+            wifi.SuccessMarker
+        };
 
         var result = MacExitCleanupService.ParseCleanupResult(
             request,
@@ -122,8 +195,70 @@ public sealed class MacExitCleanupServiceTests
             new MacShellResult(0, string.Join('\n', successes), string.Empty));
 
         result.RawTunnelStopped.Should().BeFalse();
-        result.RemovedManagedIps.Should().Equal("1.2.3.4");
+        result.AlreadyAbsentManagedRoutes.Should().Equal(
+            new ManagedRouteEntry("one.example", "1.2.3.4", "utun4"));
+        result.DeletedManagedRoutes.Should().BeEmpty();
         result.RestoredDnsServices.Should().Equal("Wi-Fi");
+    }
+
+    [Fact]
+    public void ParseCleanupResult_ReplacedRouteMarker_ResolvesDebtWithoutDeletingReplacement()
+    {
+        var route = new ManagedRouteEntry("one.example", "1.2.3.4", "utun4");
+        var request = new MacCleanupRequest { ManagedRoutesToRemove = [route] };
+        var batch = MacExitCleanupService.BuildCleanupBatch(WgQuick, request);
+        var operation = batch.Operations.Should().ContainSingle().Subject;
+
+        var result = MacExitCleanupService.ParseCleanupResult(
+            request,
+            batch,
+            new MacShellResult(
+                0,
+                operation.OutcomeMarker(MacManagedRouteCleanupDisposition.ReplacedByOtherInterface),
+                string.Empty));
+
+        result.ReplacedManagedRoutes.Should().Equal(route);
+        result.DeletedManagedRoutes.Should().BeEmpty();
+        batch.Script.Should().Contain("destination:");
+        batch.Script.Should().Contain("interface:");
+    }
+
+    [Fact]
+    public void BuildCleanupBatch_LegacyRouteWithoutExactInterface_RemainsDebt()
+    {
+        var batch = MacExitCleanupService.BuildCleanupBatch(
+            WgQuick,
+            new MacCleanupRequest
+            {
+                ManagedRoutesToRemove =
+                [
+                    new ManagedRouteEntry("legacy.example", "1.2.3.4")
+                ]
+            });
+
+        batch.Script.Should().BeEmpty();
+        batch.Operations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ParseCleanupResult_DuplicateLegacyIp_DoesNotResolveUnknownOwnership()
+    {
+        var owned = new ManagedRouteEntry("owned.example", "1.2.3.4", "utun4");
+        var legacy = new ManagedRouteEntry("legacy.example", "1.2.3.4");
+        var request = new MacCleanupRequest { ManagedRoutesToRemove = [owned, legacy] };
+        var batch = MacExitCleanupService.BuildCleanupBatch(WgQuick, request);
+        var operation = batch.Operations.Should().ContainSingle().Subject;
+
+        var result = MacExitCleanupService.ParseCleanupResult(
+            request,
+            batch,
+            new MacShellResult(
+                0,
+                operation.OutcomeMarker(MacManagedRouteCleanupDisposition.AlreadyAbsent),
+                string.Empty));
+
+        result.AlreadyAbsentManagedRoutes.Should().Equal(owned);
+        result.AlreadyAbsentManagedRoutes.Should().NotContain(legacy);
     }
 
     [Fact]

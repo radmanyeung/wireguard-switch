@@ -11,8 +11,9 @@ public sealed class MacCleanupStateReducerTests
         [],
         [],
         [
-            new ManagedRouteEntry("one.example", "198.51.100.10"),
-            new ManagedRouteEntry("two.example", "198.51.100.20")
+            new ManagedRouteEntry("one.example", "198.51.100.10", "utun4"),
+            new ManagedRouteEntry("two.example", "198.51.100.20", "utun4"),
+            new ManagedRouteEntry("legacy.example", "198.51.100.30")
         ]) with
     {
         ActiveSplitTunnelConfigPath = "/data/wgst-split.conf",
@@ -23,7 +24,12 @@ public sealed class MacCleanupStateReducerTests
     {
         SplitConfigPath = "/data/wgst-split.conf",
         RawTunnelName = "SG",
-        ManagedIpsToRemove = ["198.51.100.10", "198.51.100.20"]
+        ManagedRoutesToRemove =
+        [
+            new ManagedRouteEntry("one.example", "198.51.100.10", "utun4"),
+            new ManagedRouteEntry("two.example", "198.51.100.20", "utun4"),
+            new ManagedRouteEntry("legacy.example", "198.51.100.30")
+        ]
     };
 
     [Fact]
@@ -72,7 +78,7 @@ public sealed class MacCleanupStateReducerTests
     }
 
     [Fact]
-    public void Apply_PartialRouteCleanup_RemovesOnlySuccessfulIpDebt()
+    public void Apply_RouteOutcomes_RemoveOnlyExactResolvedDebtAndPreserveLegacyDebt()
     {
         var updated = MacCleanupStateReducer.Apply(
             StateWithCleanupDebt,
@@ -80,11 +86,18 @@ public sealed class MacCleanupStateReducerTests
             new MacCleanupResult
             {
                 Prompted = true,
-                RemovedManagedIps = ["198.51.100.10"]
+                AlreadyAbsentManagedRoutes =
+                [
+                    new ManagedRouteEntry("one.example", "198.51.100.10", "utun4")
+                ],
+                ReplacedManagedRoutes =
+                [
+                    new ManagedRouteEntry("two.example", "198.51.100.20", "utun4")
+                ]
             });
 
         updated.ManagedRouteSnapshot.Should().Equal(
-            new ManagedRouteEntry("two.example", "198.51.100.20"));
+            new ManagedRouteEntry("legacy.example", "198.51.100.30"));
     }
 
     [Fact]
@@ -124,7 +137,8 @@ public sealed class MacCleanupStateReducerTests
             {
                 TunnelName = debt.TunnelName,
                 ConfigPath = debt.ConfigPath,
-                ServicesToRestore = [wifi, ethernet]
+                DnsServersToRestore = [wifi, ethernet],
+                SearchDomainsToRestore = [wifi, ethernet]
             }
         };
 
@@ -134,7 +148,8 @@ public sealed class MacCleanupStateReducerTests
             new MacCleanupResult
             {
                 Prompted = true,
-                RestoredDnsServices = ["Wi-Fi"]
+                RestoredDnsServerServices = ["Wi-Fi"],
+                RestoredSearchDomainServices = ["Wi-Fi"]
             });
 
         updated.RawTunnelDnsCleanupDebt.Should().NotBeNull();
@@ -158,7 +173,8 @@ public sealed class MacCleanupStateReducerTests
             {
                 TunnelName = debt.TunnelName,
                 ConfigPath = debt.ConfigPath,
-                ServicesToRestore = [wifi]
+                DnsServersToRestore = [wifi],
+                SearchDomainsToRestore = [wifi]
             }
         };
 
@@ -168,5 +184,54 @@ public sealed class MacCleanupStateReducerTests
             new MacCleanupResult { Prompted = true });
 
         updated.RawTunnelDnsCleanupDebt.Should().BeEquivalentTo(debt);
+    }
+
+    [Fact]
+    public void Apply_DnsSuccessAndSearchFailure_PreservesOnlySearchDomainDebtForRetry()
+    {
+        var wifi = new MacDnsServiceSnapshot("Wi-Fi", ["1.1.1.1"], ["home.arpa"]);
+        var debt = new MacRawTunnelDnsCleanupDebt(
+            "SG",
+            "/opt/homebrew/etc/wireguard/SG.conf",
+            ["103.86.96.100"],
+            ["tailnet.ts.net"],
+            [wifi]);
+        var state = StateWithCleanupDebt with { RawTunnelDnsCleanupDebt = debt };
+        var request = FullRequest with
+        {
+            DnsRestorePlan = new MacDnsRestorePlan
+            {
+                TunnelName = debt.TunnelName,
+                ConfigPath = debt.ConfigPath,
+                DnsServersToRestore = [wifi],
+                SearchDomainsToRestore = [wifi]
+            }
+        };
+
+        var updated = MacCleanupStateReducer.Apply(
+            state,
+            request,
+            new MacCleanupResult
+            {
+                Prompted = true,
+                RestoredDnsServerServices = ["Wi-Fi"]
+            });
+
+        updated.RawTunnelDnsCleanupDebt.Should().NotBeNull();
+        updated.RawTunnelDnsCleanupDebt!.Services.Should().ContainSingle()
+            .Which.Should().BeEquivalentTo(wifi with
+            {
+                RestoreDnsServersPending = false,
+                RestoreSearchDomainsPending = true
+            });
+
+        var retry = MacDnsRepairService.PlanSnapshotRestore(
+            updated.RawTunnelDnsCleanupDebt,
+            new Dictionary<string, MacDnsServiceSnapshot>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Wi-Fi"] = new("Wi-Fi", ["1.1.1.1"], ["tailnet.ts.net"])
+            });
+        retry.DnsServersToRestore.Should().BeEmpty();
+        retry.SearchDomainsToRestore.Should().ContainSingle();
     }
 }

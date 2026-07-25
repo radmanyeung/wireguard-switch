@@ -38,9 +38,12 @@ public static class MacCleanupStateReducer
             rawTunnelName = null;
         }
 
-        var removedIps = result.RemovedManagedIps.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resolvedRoutes = result.DeletedManagedRoutes
+            .Concat(result.AlreadyAbsentManagedRoutes)
+            .Concat(result.ReplacedManagedRoutes)
+            .ToHashSet(ManagedRouteIdentityComparer.Instance);
         var remainingRoutes = state.ManagedRouteSnapshot
-            .Where(entry => !removedIps.Contains(entry.IpAddress))
+            .Where(entry => !resolvedRoutes.Contains(entry))
             .ToList();
 
         var dnsDebt = ReduceDnsDebt(state.RawTunnelDnsCleanupDebt, request, result);
@@ -67,13 +70,42 @@ public static class MacCleanupStateReducer
             return debt;
         }
 
-        var resolvedServices = plan.ServicesResolvedWithoutRestore
-            .Concat(result.RestoredDnsServices)
+        var resolvedDnsServices = plan.DnsServerServicesResolvedWithoutRestore
+            .Concat(result.RestoredDnsServerServices)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resolvedSearchServices = plan.SearchDomainServicesResolvedWithoutRestore
+            .Concat(result.RestoredSearchDomainServices)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var remaining = debt.Services
-            .Where(snapshot => !resolvedServices.Contains(snapshot.ServiceName))
+            .Select(snapshot => snapshot with
+            {
+                RestoreDnsServersPending = snapshot.RestoreDnsServersPending
+                    && !resolvedDnsServices.Contains(snapshot.ServiceName),
+                RestoreSearchDomainsPending = snapshot.RestoreSearchDomainsPending
+                    && !resolvedSearchServices.Contains(snapshot.ServiceName)
+            })
+            .Where(snapshot => snapshot.RestoreDnsServersPending
+                               || snapshot.RestoreSearchDomainsPending)
             .ToList();
 
         return remaining.Count == 0 ? null : debt with { Services = remaining };
+    }
+
+    private sealed class ManagedRouteIdentityComparer : IEqualityComparer<ManagedRouteEntry>
+    {
+        internal static ManagedRouteIdentityComparer Instance { get; } = new();
+
+        public bool Equals(ManagedRouteEntry? x, ManagedRouteEntry? y) =>
+            x is not null
+            && y is not null
+            && string.Equals(x.IpAddress, y.IpAddress, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(x.InterfaceName, y.InterfaceName, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode(ManagedRouteEntry obj) =>
+            HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.IpAddress),
+                obj.InterfaceName is null
+                    ? 0
+                    : StringComparer.OrdinalIgnoreCase.GetHashCode(obj.InterfaceName));
     }
 }

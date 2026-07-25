@@ -61,6 +61,29 @@ public sealed class MacTunnelControlServiceTests
     }
 
     [Fact]
+    public void BuildInstallAndStartScript_DurablyCapturesDnsImmediatelyBeforeUp()
+    {
+        const string journalPath =
+            "/Users/u/Application Support/WireguardSplitTunnel/.wgst-dns-journal-0123456789abcdef0123456789abcdef.v1";
+        var script = MacTunnelControlService.BuildInstallAndStartScript(
+            "/opt/homebrew/bin/wg-quick",
+            "/opt/homebrew/etc/wireguard/SG.conf",
+            [],
+            journalPath);
+
+        var down = script.IndexOf("wg-quick down", StringComparison.Ordinal);
+        var capture = script.IndexOf("networksetup -listallnetworkservices", StringComparison.Ordinal);
+        var publish = script.IndexOf("/bin/mv -f", StringComparison.Ordinal);
+        var sync = script.IndexOf("/bin/sync", StringComparison.Ordinal);
+        var up = script.IndexOf("wg-quick up", StringComparison.Ordinal);
+
+        down.Should().BeLessThan(capture);
+        capture.Should().BeLessThan(publish);
+        publish.Should().BeLessThan(sync);
+        sync.Should().BeLessThan(up);
+    }
+
+    [Fact]
     public void BuildStopScript_MaliciousBareTunnelName_RejectsBeforeElevation()
     {
         var act = () => MacTunnelControlService.BuildStopScript(
