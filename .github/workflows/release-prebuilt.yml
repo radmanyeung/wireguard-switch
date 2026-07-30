@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-windows-release:
@@ -14,80 +14,297 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish win-x64 self-contained
+      - name: Validate tag and compatibility metadata
+        shell: pwsh
+        run: |
+          $props = [xml](Get-Content ./Directory.Build.props -Raw)
+          $version = [string]($props.Project.PropertyGroup.VersionPrefix | Select-Object -First 1)
+          $minimum = [string]($props.Project.PropertyGroup.MinimumAutoUpdateVersion | Select-Object -First 1)
+          $rollback = [string]($props.Project.PropertyGroup.RollbackCompatibleFromVersion | Select-Object -First 1)
+          $schemaText = [string]($props.Project.PropertyGroup.StateSchemaVersion | Select-Object -First 1)
+          $strictVersion = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+          foreach ($value in @($version, $minimum, $rollback)) {
+            if ($value -cnotmatch $strictVersion) {
+              throw "Version metadata is not strict X.Y.Z: $value"
+            }
+          }
+          if ($schemaText -cnotmatch '^[1-9][0-9]*$') {
+            throw "StateSchemaVersion must be a positive integer: $schemaText"
+          }
+          if ($env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not exactly match VersionPrefix $version."
+          }
+
+          $releaseVersion = [version]$version
+          $minimumVersion = [version]$minimum
+          $rollbackVersion = [version]$rollback
+          if ($minimumVersion -gt $releaseVersion -or $rollbackVersion -gt $releaseVersion) {
+            throw 'Compatibility floors cannot be newer than the Release.'
+          }
+
+          $isInitialUpdaterBootstrap =
+            $version -ceq '0.2.0' -and
+            $minimum -ceq $version -and
+            $rollback -ceq $version
+          if (-not $isInitialUpdaterBootstrap -and
+              ($minimumVersion -ge $releaseVersion -or $rollbackVersion -ge $releaseVersion)) {
+            throw 'After v0.2.0, compatibility floors must identify a strictly older eligible version.'
+          }
+
+          "RELEASE_VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Test non-Mac Core behavior
+        shell: pwsh
         run: >-
-          dotnet publish ./src/WireguardSplitTunnel.App/WireguardSplitTunnel.App.csproj
+          dotnet test
+          ./tests/WireguardSplitTunnel.Core.Tests/WireguardSplitTunnel.Core.Tests.csproj
+          -c Release
+          --filter "FullyQualifiedName!~Mac"
+
+      - name: Test Windows updater behavior
+        shell: pwsh
+        run: >-
+          dotnet test
+          ./tests/WireguardSplitTunnel.WindowsUpdate.Tests/WireguardSplitTunnel.WindowsUpdate.Tests.csproj
+          -c Release
+
+      - name: Build Windows Release projects
+        shell: pwsh
+        run: |
+          dotnet build ./src/WireguardSplitTunnel.App/WireguardSplitTunnel.App.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build ./src/WireguardSplitTunnel.Updater/WireguardSplitTunnel.Updater.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Publish App self-contained win-x64
+        shell: pwsh
+        run: >-
+          dotnet publish
+          ./src/WireguardSplitTunnel.App/WireguardSplitTunnel.App.csproj
           -c Release
           -r win-x64
           --self-contained true
           -p:PublishSingleFile=true
-          -o ./WireguardSplitTunnel
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o ./artifacts/publish-app
 
-      - name: Assemble release package
+      - name: Publish Updater self-contained win-x64
+        shell: pwsh
+        run: >-
+          dotnet publish
+          ./src/WireguardSplitTunnel.Updater/WireguardSplitTunnel.Updater.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          -o ./artifacts/publish-updater
+
+      - name: Assemble exact Windows package and checksum
         shell: pwsh
         run: |
-          $packageDir = Join-Path $PWD 'release-package'
-          $publishDir = Join-Path $PWD 'WireguardSplitTunnel'
-          $scriptsDir = Join-Path $PWD 'scripts'
+          & ./scripts/package-windows.ps1 `
+            -Tag $env:GITHUB_REF_NAME `
+            -OutputRoot ./artifacts/windows-release `
+            -AppPublishRoot ./artifacts/publish-app `
+            -UpdaterPublishRoot ./artifacts/publish-updater `
+            -Props ./Directory.Build.props
 
-          Remove-Item $packageDir -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $packageDir | Out-Null
+      - name: Validate generated release manifest from compatibility metadata
+        shell: pwsh
+        run: |
+          & ./scripts/validate-release-package.ps1 `
+            -PackageRoot ./artifacts/windows-release/package `
+            -Props ./Directory.Build.props `
+            -ExpectedTag $env:GITHUB_REF_NAME
 
-          $rootFiles = @(
-            'install.cmd',
-            'start.cmd',
-            'start-admin.cmd',
-            'start-safe.cmd',
-            'test.cmd',
-            'diagnose.cmd',
-            'fix-dns.cmd',
-            'reset-network.cmd',
-            'README.md'
-          )
+      - name: Run generated ZIP through production validation
+        shell: pwsh
+        run: |
+          $env:WGST_REQUIRE_PRODUCED_ARTIFACT = '1'
+          $env:WGST_PRODUCED_ARCHIVE = (
+            Resolve-Path ./artifacts/windows-release/wireguard-split-tunnel-win-x64.zip
+          ).Path
+          $env:WGST_PRODUCED_SIDECAR = (
+            Resolve-Path ./artifacts/windows-release/wireguard-split-tunnel-win-x64.zip.sha256
+          ).Path
+          $env:WGST_PRODUCED_VERSION = $env:RELEASE_VERSION
+          dotnet test `
+            ./tests/WireguardSplitTunnel.WindowsUpdate.Tests/WireguardSplitTunnel.WindowsUpdate.Tests.csproj `
+            -c Release `
+            --no-build `
+            --filter "FullyQualifiedName~WorkflowProducedZipAndSidecar_AreAcceptedByProductionValidation"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          foreach ($file in $rootFiles) {
-            Copy-Item (Join-Path $PWD $file) -Destination $packageDir -Force
+      - name: Verify release-layout launcher DryRun
+        shell: pwsh
+        run: |
+          Push-Location ./artifacts/windows-release/package
+          try {
+            & ./scripts/start.ps1 -DryRun
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          finally {
+            Pop-Location
           }
 
-          Copy-Item $scriptsDir -Destination $packageDir -Recurse -Force
-          Copy-Item $publishDir -Destination $packageDir -Recurse -Force
-
-      - name: Pack release zip
+      - name: Verify exact Windows ZIP and sidecar
         shell: pwsh
-        run: Compress-Archive -Path ./release-package/* -DestinationPath ./wireguard-split-tunnel-win-x64.zip -Force
+        run: |
+          $zip = Resolve-Path ./artifacts/windows-release/wireguard-split-tunnel-win-x64.zip
+          $sidecar = Resolve-Path ./artifacts/windows-release/wireguard-split-tunnel-win-x64.zip.sha256
+          $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+          $text = $strictUtf8.GetString([IO.File]::ReadAllBytes($sidecar))
+          $expected = "$digest  wireguard-split-tunnel-win-x64.zip`n"
+          if ($text -cne $expected) {
+            throw 'Windows checksum sidecar is not the exact lowercase canonical form.'
+          }
 
-      - name: Create GitHub Release and upload asset
-        uses: softprops/action-gh-release@v2
+      - name: Upload validated Windows artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: ./wireguard-split-tunnel-win-x64.zip
-          generate_release_notes: true
+          name: windows-release
+          path: |
+            ./artifacts/windows-release/wireguard-split-tunnel-win-x64.zip
+            ./artifacts/windows-release/wireguard-split-tunnel-win-x64.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
 
   build-mac-release:
     runs-on: macos-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '8.0.x'
+
+      - name: Test Mac Core behavior
+        run: >-
+          dotnet test
+          ./tests/WireguardSplitTunnel.Core.Tests/WireguardSplitTunnel.Core.Tests.csproj
+          -c Release
+          --filter "FullyQualifiedName~Mac"
 
       - name: Build macOS app package
         run: |
           chmod +x ./scripts/check-mac-deps.sh ./scripts/package-mac.sh
           ./scripts/package-mac.sh
 
-      - name: Create GitHub Release and upload Mac asset
-        uses: softprops/action-gh-release@v2
+      - name: Upload validated Mac artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: ./.build/mac-package/wireguard-split-tunnel-mac-arm64.zip
+          name: mac-release
+          path: ./.build/mac-package/wireguard-split-tunnel-mac-arm64.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-release:
+    needs: [build-windows-release, build-mac-release]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout validation sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Download validated build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: ./release-artifacts
+          merge-multiple: true
+
+      - name: Validate downloaded release artifacts
+        shell: pwsh
+        run: |
+          $artifactRoot = (Resolve-Path ./release-artifacts).Path
+          $expectedNames = @(
+            'wireguard-split-tunnel-mac-arm64.zip',
+            'wireguard-split-tunnel-win-x64.zip',
+            'wireguard-split-tunnel-win-x64.zip.sha256'
+          )
+          $actualFiles = @(Get-ChildItem -LiteralPath $artifactRoot -Recurse -File)
+          if (@($actualFiles | Where-Object { $_.DirectoryName -cne $artifactRoot }).Count -ne 0) {
+            throw 'Downloaded artifacts must all be exact top-level files.'
+          }
+          $actualNames = @($actualFiles | ForEach-Object Name | Sort-Object)
+          if ([string]::Join("`n", $actualNames) -cne [string]::Join("`n", $expectedNames)) {
+            throw "Downloaded artifact set is not exact: $($actualNames -join ', ')"
+          }
+
+          $zip = Join-Path $artifactRoot 'wireguard-split-tunnel-win-x64.zip'
+          $sidecar = "$zip.sha256"
+          $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+          $text = $strictUtf8.GetString([IO.File]::ReadAllBytes($sidecar))
+          if ($text -cne "$digest  wireguard-split-tunnel-win-x64.zip`n") {
+            throw 'Downloaded checksum sidecar is invalid.'
+          }
+
+          $mac = Join-Path $artifactRoot 'wireguard-split-tunnel-mac-arm64.zip'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $macZip = [IO.Compression.ZipFile]::OpenRead($mac)
+          try {
+            $macExecutable = @($macZip.Entries | Where-Object {
+              $_.FullName.EndsWith(
+                '/WireguardSplitTunnel.app/Contents/MacOS/WireguardSplitTunnel',
+                [StringComparison]::Ordinal)
+            })
+            if ($macExecutable.Count -ne 1 -or $macExecutable[0].Length -le 0) {
+              throw 'Downloaded Mac archive is missing its exact non-empty executable.'
+            }
+          }
+          finally {
+            $macZip.Dispose()
+          }
+
+          $expanded = Join-Path $env:RUNNER_TEMP 'wireguard-release-validation'
+          Expand-Archive -LiteralPath $zip -DestinationPath $expanded
+          & ./scripts/validate-release-package.ps1 `
+            -PackageRoot $expanded `
+            -Props ./Directory.Build.props `
+            -ExpectedTag $env:GITHUB_REF_NAME
+          Push-Location $expanded
+          try {
+            & ./scripts/start.ps1 -DryRun
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Publish one GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: |
+            ./release-artifacts/wireguard-split-tunnel-win-x64.zip
+            ./release-artifacts/wireguard-split-tunnel-win-x64.zip.sha256
+            ./release-artifacts/wireguard-split-tunnel-mac-arm64.zip
+          fail_on_unmatched_files: true
           generate_release_notes: true

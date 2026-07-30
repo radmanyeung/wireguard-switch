@@ -38,6 +38,52 @@ Installer bootstrap does:
 - The Release ZIP includes the published app, helper scripts, and installer/startup wrappers.
 - Installer will automatically try to remove the Windows download block (`Unblock-File`) from the extracted release files.
 
+## Windows automatic updates (v0.2.0 and later)
+
+Version `0.2.0` is the first updater-capable Release. An existing `v0.1.9` or
+older installation cannot bootstrap this feature by itself: download the
+verified `v0.2.0` Windows Release, extract it to a fresh folder, and run
+`install.cmd` once. Later stable Releases can then update automatically.
+
+Automatic updates are enabled by default. The Windows app checks GitHub stable
+Releases at most once every 24 hours, downloads and validates an available
+update in the background, and shows its current status. Use the **Automatically
+update from GitHub Releases** preference to control scheduled checks or **Check
+now** to run one check immediately. A manual check still works while scheduled
+checks are disabled. Typical statuses include checking, downloading, ready to
+install, up to date, an error, or `RecoveryBlocked`.
+
+A ready update is installed only after an eligible, elevated, normal app close.
+A crash, forced termination, Windows session ending, reboot, or a non-elevated
+run does not authorize installation. The app restores its routes and saves its
+state first, then starts the protected updater. It deliberately does not reopen
+itself after a close-time update; start it normally next time, when the new
+version performs its health check and either commits or rolls back safely.
+
+Updater diagnostics are written to:
+
+```text
+%LOCALAPPDATA%\WireguardSplitTunnel\logs\updater.log
+```
+
+If startup reports `RecoveryBlocked`, do not delete the protected transaction
+or replace files by hand. Download a freshly extracted, verified Windows
+Release and explicitly run:
+
+```bat
+install.cmd -RepairBlockedUpdate
+```
+
+The repair validates the bundled Release, clears only the active pointer, and
+keeps the blocked transaction evidence for diagnosis. During an online update,
+the current GitHub Release API response supplies the trusted asset digest; the
+downloaded ZIP and fixed-name `.sha256` sidecar must both match it. This detects
+corruption and mixed-up downloads, but is not independent publisher signing.
+Authenticode signing remains a future hardening option.
+
+The macOS package has no automatic updater. Download and install each macOS
+Release manually.
+
 ## macOS Apple Silicon release
 
 Download `wireguard-split-tunnel-mac-arm64.zip` from GitHub Releases and extract
@@ -135,11 +181,15 @@ install.cmd -SkipPublish -NoDesktopShortcut
 - Start app: double-click `start.cmd` (or `start-admin.cmd`)
 - When UAC prompt appears, click **Yes**
 - Run tests: double-click `test.cmd`
-- If startup or install closes immediately, check the `.\logs\` folder for:
+- If startup, install, testing, or diagnostics closes immediately, check
+  `%LOCALAPPDATA%\WireguardSplitTunnel\logs\` for:
   - `install.cmd.log`
   - `install.ps1.log`
   - `start.cmd.log`
+  - `start-admin.cmd.log`
+  - `start-safe.cmd.log`
   - `start.ps1.log`
+  - `test.cmd.log`
   - `diagnose.cmd.log`
 - You can also run `diagnose.cmd` to capture current app / WireGuard / route status into a log file.
 
@@ -170,25 +220,27 @@ pwsh -File .\scripts\test.ps1
 ```
 
 ## GitHub Releases prebuilt
-- Default source: `radmanyeung/wireguard-switch` latest release.
-- Installer/startup auto-downloads `.zip` or `.exe` prebuilt when local EXE is missing.
-- Recommended asset name includes `wireguard` + (`split`/`tunnel`/`switch`).
-
-Environment overrides:
-- `WGST_RELEASE_REPO`: override GitHub repo (format `owner/repo`).
-- `WGST_RELEASE_ASSET_URL`: direct URL to prebuilt `.zip` or `.exe` asset (takes priority).
+- Fixed source: stable Releases from `radmanyeung/wireguard-switch`.
+- Bootstrap requires the exact Windows archive
+  `wireguard-split-tunnel-win-x64.zip` and its exact `.sha256` sidecar.
+- Repository and direct-asset environment overrides are intentionally not
+  accepted by the secure bootstrap, updater, or blocked-recovery flow.
 
 ## Release automation (update prebuilt)
-Push a tag like `v0.1.1`; GitHub Actions will auto-build and publish release asset `wireguard-split-tunnel-win-x64.zip`.
+A maintainer may manually push a tag that exactly matches the
+`VersionPrefix` in `Directory.Build.props`. GitHub Actions tests and validates
+both platform packages, then one final job publishes the Release assets.
+Creating or pushing a tag is never performed by the app's automatic updater and
+remains an explicit maintainer action.
 
 Recommended when sharing with other people:
 - Create a new tag after user-facing fixes, so GitHub Releases contains the latest prebuilt.
 - Tell users to download the latest Release asset when you want the simplest install path (`extract -> install.cmd`).
 
-Commands:
+Example maintainer commands (replace the version deliberately):
 ```powershell
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1
+git tag -a v0.2.0 -m "Release v0.2.0"
+git push origin v0.2.0
 ```
 
 Links:

@@ -16,6 +16,7 @@ using Microsoft.VisualBasic;
 using Microsoft.Win32;
 using WireguardSplitTunnel.Core.Models;
 using WireguardSplitTunnel.Core.Services;
+using WireguardSplitTunnel.Core.Updates;
 using WireguardSplitTunnel.App.Services;
 
 namespace WireguardSplitTunnel.App;
@@ -35,6 +36,9 @@ public partial class MainWindow : Window
     private readonly NetworkGraphHistory monitorGraphHistory = new(TimeSpan.FromSeconds(60));
     private readonly IncrementalDnsRouteReconciler incrementalDnsRouteReconciler;
     private readonly IAppLogger logger;
+    private readonly ApplicationCloseIntentTracker closeIntentTracker;
+    private readonly ApplicationCloseOrchestrator
+        applicationCloseOrchestrator;
     private readonly StateStore stateStore;
     private readonly StateStore appliedStateStore;
     private readonly StateStore tempListStore;
@@ -60,9 +64,21 @@ public partial class MainWindow : Window
     private static readonly string[] SafeDnsFallbackServers = ["8.8.8.8", "1.1.1.1"];
 
 
-    public MainWindow(bool runPostInstallSelfTestOnLoad = false)
+    internal MainWindow(
+        bool runPostInstallSelfTestOnLoad = false,
+        ApplicationCloseIntentTracker? closeIntentTracker = null,
+        IUpdateCloseParticipant? updateCloseParticipant = null,
+        WindowsUpdateCompositionRoot? windowsUpdate = null,
+        UpdateStartupHealthContext? updateStartupHealthContext =
+            null)
     {
         this.runPostInstallSelfTestOnLoad = runPostInstallSelfTestOnLoad;
+        this.windowsUpdate = windowsUpdate;
+        this.updateStartupHealthContext =
+            updateStartupHealthContext;
+        this.closeIntentTracker =
+            closeIntentTracker
+            ?? new ApplicationCloseIntentTracker();
         InitializeComponent();
         incrementalDnsRouteReconciler = new IncrementalDnsRouteReconciler(dnsCacheReader);
 
@@ -96,6 +112,20 @@ public partial class MainWindow : Window
         appliedStateStore = new StateStore(Path.Combine(dataDirectory, "applied-state.json"));
         tempListStore = new StateStore(Path.Combine(dataDirectory, "temp-lists.json"));
         state = PrimaryAppStateLoader.Load(stateStore);
+        InitializeWindowsUpdate();
+        var closeActions = new WpfApplicationCloseActions(
+            softwareApplySemaphore,
+            renewSemaphore,
+            () => stateStore.Save(state));
+        applicationCloseOrchestrator =
+            new ApplicationCloseOrchestrator(
+                updateCloseParticipant
+                ?? NoOpUpdateCloseParticipant.Instance,
+                closeActions,
+                this.closeIntentTracker,
+                CreateApplicationCloseRequest(
+                    runPostInstallSelfTestOnLoad),
+                _ => RestoreNormalRoutingOnExitAsync());
 
         Loaded += OnLoaded;
         Closing += OnWindowClosing;
@@ -138,9 +168,37 @@ public partial class MainWindow : Window
         dnsCacheLearningTimer.Tick += OnDnsCacheLearningTimerTick;
         MonitorGraphCanvas.SizeChanged += OnMonitorGraphCanvasSizeChanged;
     }
+    private void LogApplicationCloseResult(
+        ApplicationCloseResult result)
+    {
+        var authorization = result.AuthorizationResult;
+        logger.Info(
+            $"Application close completed. "
+            + $"outcome={result.Outcome}, "
+            + $"failures={result.Failures}, "
+            + $"authorizationPresent={authorization is not null}, "
+            + $"authorizationOutcome="
+            + $"{authorization?.Outcome.ToString() ?? "none"}, "
+            + $"authorizationError="
+            + $"{authorization?.ErrorCode ?? "none"}.");
+    }
+
     private async void OnWindowClosing(object? sender, CancelEventArgs e)
     {
+        if (allowCloseWithoutRestore)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (isWindowClosing)
+        {
+            return;
+        }
+
         isWindowClosing = true;
+        PrepareWindowsUpdateForClose();
+        closeIntentTracker.ResolveNormalClose();
         NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
         softwareReapplyDebounceCts?.Cancel();
@@ -149,24 +207,22 @@ public partial class MainWindow : Window
         dnsCacheLearningCts.Cancel();
         monitorRefreshCts?.Cancel();
 
-        if (allowCloseWithoutRestore || !state.RestoreNormalRoutingOnExit)
-        {
-            return;
-        }
-
-        e.Cancel = true;
-
         try
         {
-            await DomainRouteOperationSerializer.RunAsync(renewSemaphore, RestoreNormalRoutingOnExitAsync);
+            var result =
+                await applicationCloseOrchestrator
+                    .RunOnceAsync(CancellationToken.None);
+            LogApplicationCloseResult(result);
         }
         catch (Exception ex)
         {
-            logger.Error("Restore on exit failed.", ex);
-            MessageBox.Show(this, $"Restore on exit failed: {ex.Message}", "Wireguard Split Tunnel");
+            logger.Error(
+                "Application close orchestration failed.",
+                ex);
         }
         finally
         {
+            DisposeWindowsUpdate();
             allowCloseWithoutRestore = true;
             Close();
         }
@@ -195,7 +251,10 @@ public partial class MainWindow : Window
             RefreshDomainGrid();
             RefreshSoftwareGrid();
 
-            await AutoRenewDomainRoutesOnStartAsync();
+            var routingOutcome =
+                await AutoRenewDomainRoutesOnStartAsync();
+            await RunWindowsUpdateStartupAsync(
+                routingOutcome);
 
             if (runPostInstallSelfTestOnLoad)
             {
@@ -649,6 +708,7 @@ public partial class MainWindow : Window
         var mode = GetUnifiedGlobalMode();
         AutoEnableCheckBox.IsChecked = state.AutoEnableTunnel;
         RestoreOnExitCheckBox.IsChecked = state.RestoreNormalRoutingOnExit;
+        LoadWindowsUpdateSettingsToUi();
         UnifiedGlobalModeCombo.SelectedIndex = mode == DomainRouteMode.UseWireGuard ? 0 : 1;
 
         RefreshTunnelConfigOptions();
@@ -1114,7 +1174,9 @@ public partial class MainWindow : Window
             await Task.Delay(500, cancellationToken);
         }
     }
-    private async Task AutoRenewDomainRoutesOnStartAsync()
+
+    private async Task<ApplicationStartupRoutingOutcome>
+        AutoRenewDomainRoutesOnStartAsync()
     {
         try
         {
@@ -1129,14 +1191,19 @@ public partial class MainWindow : Window
             {
                 logger.Info("Auto renew on startup skipped.");
             }
+
+            return ApplicationStartupRoutingOutcome.Completed;
         }
         catch (Exception ex)
         {
             logger.Error("Auto renew on startup failed.", ex);
             TunnelStatusText.Text = "Tunnel: Auto-renew error";
             MessageBox.Show(this, $"Auto-renew failed: {ex.Message}", "Wireguard Split Tunnel");
+            return ApplicationStartupRoutingOutcome
+                .HandledFailure;
         }
     }
+
     private async Task RunPostInstallSelfTestsAsync()
     {
         try
@@ -1413,6 +1480,13 @@ public partial class MainWindow : Window
     private async Task RestoreNormalRoutingOnExitAsync()
     {
         logger.Info("Restore on exit started.");
+        if (!state.RestoreNormalRoutingOnExit)
+        {
+            logger.Info(
+                "Restore on exit disabled; "
+                + "close restore is a no-op.");
+            return;
+        }
 
         if (!detector.TryGetActiveInterface(out var wireguardInterfaceName))
         {
@@ -1438,7 +1512,6 @@ public partial class MainWindow : Window
         logger.Info("Restore on exit: skipping forced WireGuard full-tunnel /1 routes.");
 
         state = state with { ManagedRouteSnapshot = [] };
-        stateStore.Save(state);
 
         logger.Info($"Restore on exit completed. Removed managed routes: {managedIps.Count}");
     }
@@ -1645,7 +1718,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            state = RuleStateMutations.Clone(appliedStateStore.Load());
+            state = RuleStateMutations.CloneForAppliedRollback(state, appliedStateStore.Load());
             stateStore.Save(state);
             LoadSettingsToUi();
             RefreshDomainGrid();
@@ -2136,6 +2209,14 @@ public partial class MainWindow : Window
         Interlocked.Exchange(ref softwareApplyInProgress, 1);
         try
         {
+            if (isWindowClosing)
+            {
+                logger.Info(
+                    "Software apply skipped: "
+                    + "application close is in progress.");
+                return;
+            }
+
             if (showMessage)
             {
                 ApplySoftwareButton.IsEnabled = false;
@@ -2830,6 +2911,33 @@ public partial class MainWindow : Window
             && string.IsNullOrWhiteSpace(stderr)
             && !ContainsRouteFailure(combined);
         return new RouteCommandResult(success, process.ExitCode, stdout.Trim(), stderr.Trim());
+    }
+
+    private static ApplicationCloseRequest
+        CreateApplicationCloseRequest(
+            bool isPostInstallSelfTest)
+    {
+        var creationTimeFileTimeUtc = 0L;
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            creationTimeFileTimeUtc = process.StartTime
+                .ToUniversalTime()
+                .ToFileTimeUtc();
+        }
+        catch
+        {
+            // Invalid process identity fails update authorization closed.
+        }
+
+        return new ApplicationCloseRequest(
+            IsElevated: IsRunningAsAdministrator(),
+            IsPostInstallSelfTest: isPostInstallSelfTest,
+            ProcessId: Environment.ProcessId,
+            CreationTimeFileTimeUtc:
+                creationTimeFileTimeUtc,
+            ImagePath: Environment.ProcessPath
+                ?? string.Empty);
     }
 
     private static bool IsRunningAsAdministrator()

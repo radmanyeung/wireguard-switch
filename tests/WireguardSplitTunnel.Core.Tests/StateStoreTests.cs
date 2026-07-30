@@ -38,6 +38,63 @@ public sealed class StateStoreTests
     }
 
     [Fact]
+    public void LoadWithMetadata_ReturnsDefaultStateAndEmptyPresence_WhenFileDoesNotExist()
+    {
+        var path = CreateTestPath();
+
+        var result = new StateStore(path).LoadWithMetadata();
+
+        result.State.AutoUpdateEnabled.Should().BeTrue();
+        result.PresentPropertyNames.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void LoadWithMetadata_ReturnsDefaultStateAndEmptyPresence_WhenFileIsBlank()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, "   \r\n");
+
+        try
+        {
+            var result = new StateStore(path).LoadWithMetadata();
+
+            result.State.AutoUpdateEnabled.Should().BeTrue();
+            result.PresentPropertyNames.Should().BeEmpty();
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadWithMetadata_TracksTopLevelPropertyNamesUsingOrdinalCaseSensitiveMatching()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, """{ "AutoUpdateEnabled": false, "autoupdateenabled": true }""");
+
+        try
+        {
+            var result = new StateStore(path).LoadWithMetadata();
+
+            result.State.AutoUpdateEnabled.Should().BeFalse();
+            result.PresentPropertyNames.Should().Contain("AutoUpdateEnabled");
+            result.PresentPropertyNames.Should().Contain("autoupdateenabled");
+            result.PresentPropertyNames.Contains("AUTOUPDATEENABLED").Should().BeFalse();
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+    }
+
+    [Fact]
     public void SaveAndLoad_RoundTripsState()
     {
         var path = CreateTestPath();
@@ -276,6 +333,27 @@ public sealed class StateStoreTests
         if (File.Exists(path))
         {
             File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadWithMetadata_ThrowsInvalidDataException_ForCorruptNonEmptyJson()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, "{\"DomainRules\": [");
+
+        try
+        {
+            Action act = () => new StateStore(path).LoadWithMetadata();
+
+            act.Should().Throw<InvalidDataException>();
+        }
+        finally
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
         }
     }
 

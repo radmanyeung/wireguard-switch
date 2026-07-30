@@ -17,22 +17,35 @@ public sealed class StateStore
         this.filePath = filePath;
     }
 
-    public AppState Load()
+    public AppState Load() => LoadWithMetadata().State;
+
+    public StateLoadResult LoadWithMetadata()
     {
         if (!File.Exists(filePath))
         {
-            return CreateDefaultState();
+            return new StateLoadResult(CreateDefaultState(), new HashSet<string>(StringComparer.Ordinal));
         }
 
         var json = File.ReadAllText(filePath);
         if (string.IsNullOrWhiteSpace(json))
         {
-            return CreateDefaultState();
+            return new StateLoadResult(CreateDefaultState(), new HashSet<string>(StringComparer.Ordinal));
         }
 
         try
         {
-            return NormalizeState(JsonSerializer.Deserialize<AppState>(json, JsonOptions));
+            using var document = JsonDocument.Parse(json);
+            var presentPropertyNames = new HashSet<string>(StringComparer.Ordinal);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in document.RootElement.EnumerateObject())
+                {
+                    presentPropertyNames.Add(property.Name);
+                }
+            }
+
+            var state = NormalizeState(document.RootElement.Deserialize<AppState>(JsonOptions));
+            return new StateLoadResult(state, presentPropertyNames);
         }
         catch (JsonException ex)
         {

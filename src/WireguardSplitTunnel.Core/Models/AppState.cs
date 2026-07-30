@@ -23,7 +23,8 @@ public sealed record AppState(
     string? ActiveSplitTunnelConfigPath = null,
     // Exact pre-raw-tunnel DNS/search-domain state. This stores only resolver
     // values and config identity, never WireGuard config text or private keys.
-    MacRawTunnelDnsCleanupDebt? RawTunnelDnsCleanupDebt = null)
+    MacRawTunnelDnsCleanupDebt? RawTunnelDnsCleanupDebt = null,
+    bool AutoUpdateEnabled = true)
 {
     public Dictionary<string, List<ResolvedIpDetail>> LastKnownResolvedIpDetails { get; init; } =
         LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(StringComparer.OrdinalIgnoreCase);

@@ -1,6 +1,9 @@
 <Project>
   <PropertyGroup>
-    <VersionPrefix>0.1.9</VersionPrefix>
+    <VersionPrefix>0.2.0</VersionPrefix>
+    <MinimumAutoUpdateVersion>0.2.0</MinimumAutoUpdateVersion>
+    <RollbackCompatibleFromVersion>0.2.0</RollbackCompatibleFromVersion>
+    <StateSchemaVersion>1</StateSchemaVersion>
     <Version>$(VersionPrefix)</Version>
     <AssemblyVersion>$(VersionPrefix).0</AssemblyVersion>
     <FileVersion>$(VersionPrefix).0</FileVersion>

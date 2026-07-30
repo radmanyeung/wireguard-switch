@@ -86,5 +86,8 @@ public static class RuleStateMutations
         };
     }
 
+    public static AppState CloneForAppliedRollback(AppState currentState, AppState appliedSnapshot) =>
+        Clone(appliedSnapshot) with { AutoUpdateEnabled = currentState.AutoUpdateEnabled };
+
     private static string NormalizeDomain(string domain) => domain.Trim().ToLowerInvariant();
 }

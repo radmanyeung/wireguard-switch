@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Product>Wireguard Split Tunnel Updater</Product>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\WireguardSplitTunnel.WindowsUpdate\WireguardSplitTunnel.WindowsUpdate.csproj" />
+  </ItemGroup>
+</Project>

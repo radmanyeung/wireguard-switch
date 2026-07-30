@@ -6,9 +6,12 @@ namespace WireguardSplitTunnel.Core.Tests;
 public sealed class ReleaseVersionMetadataTests
 {
     [Fact]
-    public void CentralVersion_IsCurrentReleaseVersion()
+    public void CentralReleaseContract_IsInitialUpdaterCapableVersion()
     {
-        ReadCentralVersion().Should().Be("0.1.9");
+        ReadCentralProperty("VersionPrefix").Should().Be("0.2.0");
+        ReadCentralProperty("MinimumAutoUpdateVersion").Should().Be("0.2.0");
+        ReadCentralProperty("RollbackCompatibleFromVersion").Should().Be("0.2.0");
+        ReadCentralProperty("StateSchemaVersion").Should().Be("1");
     }
 
     [Fact]
@@ -43,11 +46,11 @@ public sealed class ReleaseVersionMetadataTests
         script.Should().Contain("WireguardSplitTunnel.app/Contents/MacOS/WireguardSplitTunnel");
     }
 
-    private static string ReadCentralVersion()
+    private static string ReadCentralProperty(string propertyName)
     {
         var document = XDocument.Parse(ReadRepositoryFile("Directory.Build.props"));
         return document
-            .Descendants("VersionPrefix")
+            .Descendants(propertyName)
             .Single()
             .Value;
     }

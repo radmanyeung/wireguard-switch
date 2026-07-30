@@ -159,7 +159,7 @@ public sealed class PrimaryAppStateLoaderTests
     public void Load_NonLegacyState_DoesNotRewriteStateFile()
     {
         var path = CreateTestPath();
-        const string originalJson = """{"DomainRules":[{"Domain":"chatgpt.com","Enabled":true,"Mode":1}],"LastKnownResolvedIps":{},"ManagedRouteSnapshot":[]}""";
+        const string originalJson = """{"DomainRules":[{"Domain":"chatgpt.com","Enabled":true,"Mode":1}],"LastKnownResolvedIps":{},"ManagedRouteSnapshot":[],"AutoUpdateEnabled":true}""";
 
         try
         {
@@ -179,6 +179,85 @@ public sealed class PrimaryAppStateLoaderTests
     }
 
     [Fact]
+    public void Load_MissingAutoUpdateEnabled_MigratesToEnabledAndPersistsTheMigration()
+    {
+        var path = CreateTestPath();
+        const string originalJson = """{"DomainRules":[],"LastKnownResolvedIps":{},"ManagedRouteSnapshot":[]}""";
+
+        try
+        {
+            File.WriteAllText(path, originalJson);
+            var store = new StateStore(path);
+
+            var loaded = PrimaryAppStateLoader.Load(store);
+
+            loaded.AutoUpdateEnabled.Should().BeTrue();
+            var persisted = store.LoadWithMetadata();
+            persisted.State.AutoUpdateEnabled.Should().BeTrue();
+            persisted.PresentPropertyNames.Should().Contain("AutoUpdateEnabled");
+            File.ReadAllText(path).Should().NotBe(originalJson);
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+    }
+
+    [Fact]
+    public void Load_MissingAutoUpdateAndCombinedLegacyPresets_SavesExactlyOnce()
+    {
+        var state = new AppState(
+            LegacyDomains
+                .Concat(LegacyClaudeDomains)
+                .Select(domain => new DomainRule(domain, true, DomainRouteMode.UseWireGuard))
+                .ToList(),
+            new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase),
+            []);
+        var saveCount = 0;
+        AppState? savedState = null;
+
+        var loaded = PrimaryAppStateLoader.Load(
+            () => new StateLoadResult(state, new HashSet<string>(StringComparer.Ordinal)),
+            migratedState =>
+            {
+                saveCount++;
+                savedState = RuleStateMutations.Clone(migratedState);
+            });
+
+        saveCount.Should().Be(1);
+        loaded.AutoUpdateEnabled.Should().BeTrue();
+        AssertHelperRules(loaded);
+        AssertClaudeHelperRules(loaded);
+        savedState.Should().NotBeNull();
+        savedState!.AutoUpdateEnabled.Should().BeTrue();
+        AssertHelperRules(savedState);
+        AssertClaudeHelperRules(savedState);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Load_ExplicitAutoUpdateEnabledValue_PreservesPreferenceWithoutRewriting(bool enabled)
+    {
+        var path = CreateTestPath();
+        var originalJson = $$"""{"DomainRules":[],"LastKnownResolvedIps":{},"ManagedRouteSnapshot":[],"AutoUpdateEnabled":{{enabled.ToString().ToLowerInvariant()}}}""";
+
+        try
+        {
+            File.WriteAllText(path, originalJson);
+            var store = new StateStore(path);
+
+            var loaded = PrimaryAppStateLoader.Load(store);
+
+            loaded.AutoUpdateEnabled.Should().Be(enabled);
+            File.ReadAllText(path).Should().Be(originalJson);
+        }
+        finally
+        {
+            DeleteIfPresent(path);
+        }
+    }
+    [Fact]
     public void ApplicationStartup_UsesPrimaryLoaderForWindowsAndMac()
     {
         var windowsSource = ReadRepositoryFile(
@@ -190,6 +269,17 @@ public sealed class PrimaryAppStateLoaderTests
         macSource.Should().Contain("appState = PrimaryAppStateLoader.Load(stateStore);");
     }
 
+    [Fact]
+    public void AppliedRollback_UsesRollbackCloneForWindowsAndMac()
+    {
+        var windowsSource = ReadRepositoryFile(
+            "src/WireguardSplitTunnel.App/MainWindow.xaml.cs");
+        var macSource = ReadRepositoryFile(
+            "src/WireguardSplitTunnel.MacApp/Views/MainWindow.axaml.cs");
+
+        windowsSource.Should().Contain("RuleStateMutations.CloneForAppliedRollback(state, appliedStateStore.Load())");
+        macSource.Should().Contain("RuleStateMutations.CloneForAppliedRollback(appState, appliedStateStore.Load())");
+    }
     private static AppState CreateLegacyState() =>
         new(
             LegacyDomains

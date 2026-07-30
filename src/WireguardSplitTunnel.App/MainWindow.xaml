@@ -15,6 +15,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -125,7 +126,37 @@
                        Foreground="#1E3A8A" />
         </Border>
 
-        <TabControl x:Name="MainTabs" Grid.Row="3">
+        <Border Grid.Row="3"
+                Margin="0,0,0,14"
+                Padding="12"
+                CornerRadius="10"
+                Background="#F8FAFC"
+                BorderBrush="#CBD5E1"
+                BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <CheckBox x:Name="AutoUpdateEnabledCheckBox"
+                          Content="Automatically update from GitHub Releases"
+                          VerticalAlignment="Center" />
+                <TextBlock x:Name="UpdateStatusTextBlock"
+                           Grid.Column="1"
+                           Margin="16,0"
+                           VerticalAlignment="Center"
+                           Foreground="#475569"
+                           TextWrapping="Wrap" />
+                <Button x:Name="CheckForUpdatesButton"
+                        Grid.Column="2"
+                        Content="Check now"
+                        MinWidth="100"
+                        Padding="10,6" />
+            </Grid>
+        </Border>
+
+        <TabControl x:Name="MainTabs" Grid.Row="4">
             <TabItem Header="Domain Rules">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>

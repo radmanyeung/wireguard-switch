@@ -42,7 +42,10 @@ public sealed class IncrementalDnsTimerIntegrationTests
         closingMethod.Should().Contain("dnsCacheLearningTimer.Stop();");
         closingMethod.Should().Contain("dnsCacheLearningCts.Cancel();");
         closingMethod.Should().Contain(
-            "await DomainRouteOperationSerializer.RunAsync(renewSemaphore, RestoreNormalRoutingOnExitAsync);");
+            "await applicationCloseOrchestrator");
+        closingMethod.Should().Contain(".RunOnceAsync(");
+        closingMethod.Should().NotContain(
+            "DomainRouteOperationSerializer.RunAsync");
 
         var lockedRenewMethod = ExtractBetween(
             source,
@@ -88,6 +91,20 @@ public sealed class IncrementalDnsTimerIntegrationTests
         toggleMethod.Should().Contain("var currentRule = state.DomainRules.FirstOrDefault");
         toggleMethod.Should().Contain("!currentRule.Enabled");
         toggleMethod.Should().NotContain("!selected.Enabled");
+
+        var softwareApplyMethod = ExtractBetween(
+            source,
+            "private async Task ApplySoftwarePoliciesAsync",
+            "private async void OnApplySoftwareClicked");
+        var gateAcquire = softwareApplyMethod.IndexOf(
+            "await softwareApplySemaphore.WaitAsync(cancellationToken)",
+            StringComparison.Ordinal);
+        var closingRecheck = softwareApplyMethod.IndexOf(
+            "if (isWindowClosing)",
+            gateAcquire < 0 ? 0 : gateAcquire,
+            StringComparison.Ordinal);
+        gateAcquire.Should().BeGreaterThanOrEqualTo(0);
+        closingRecheck.Should().BeGreaterThan(gateAcquire);
     }
 
     private static string ExtractBetween(string source, string startMarker, string endMarker)

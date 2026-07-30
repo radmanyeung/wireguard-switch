@@ -96,4 +96,52 @@ public sealed class RuleStateMutationsTests
         clone.ActiveRawTunnelName.Should().Be("SG");
         clone.MacTunnelProfiles.Should().NotBeSameAs(state.MacTunnelProfiles);
     }
+
+    [Fact]
+    public void CloneForAppliedRollback_UsesAppliedSnapshotButPreservesCurrentAutoUpdatePreference()
+    {
+        var currentState = new AppState(
+            [new DomainRule("current.example", true)],
+            new Dictionary<string, List<string>> { ["current.example"] = ["203.0.113.10"] },
+            []) with { AutoUpdateEnabled = false };
+        var appliedSnapshot = new AppState(
+            [new DomainRule("applied.example", true, DomainRouteMode.UseWireGuard)],
+            new Dictionary<string, List<string>> { ["applied.example"] = ["203.0.113.11"] },
+            [new ManagedRouteEntry("applied.example", "203.0.113.11")]) with { AutoUpdateEnabled = true };
+
+        var rollbackState = RuleStateMutations.CloneForAppliedRollback(currentState, appliedSnapshot);
+        rollbackState.DomainRules[0] = rollbackState.DomainRules[0] with { Enabled = false };
+        rollbackState.LastKnownResolvedIps["applied.example"].Add("203.0.113.12");
+
+        rollbackState.AutoUpdateEnabled.Should().BeFalse();
+        rollbackState.DomainRules.Should().ContainSingle(rule => rule.Domain == "applied.example");
+        appliedSnapshot.DomainRules[0].Enabled.Should().BeTrue();
+        appliedSnapshot.LastKnownResolvedIps["applied.example"].Should().Equal("203.0.113.11");
+    }
+
+    [Fact]
+    public void CloneForAppliedRollback_PreservesEnabledCurrentPreferenceWhenSnapshotDisabled()
+    {
+        var currentState = new AppState(
+            [new DomainRule("current.example")],
+            new Dictionary<string, List<string>>(),
+            [],
+            "current.conf") with { AutoUpdateEnabled = true };
+        var appliedSnapshot = new AppState(
+            [new DomainRule("applied.example", true, DomainRouteMode.BypassWireGuard)],
+            new Dictionary<string, List<string>> { ["applied.example"] = ["198.51.100.20"] },
+            [new ManagedRouteEntry("applied.example", "198.51.100.20")],
+            "applied.conf") with { AutoUpdateEnabled = false };
+
+        var rollbackState = RuleStateMutations.CloneForAppliedRollback(currentState, appliedSnapshot);
+        rollbackState.DomainRules[0] = rollbackState.DomainRules[0] with { Enabled = false };
+        rollbackState.LastKnownResolvedIps["applied.example"].Add("198.51.100.21");
+
+        rollbackState.AutoUpdateEnabled.Should().BeTrue();
+        rollbackState.SelectedTunnelConfigPath.Should().Be("applied.conf");
+        rollbackState.DomainRules.Should().ContainSingle(rule =>
+            rule.Domain == "applied.example" && rule.Mode == DomainRouteMode.BypassWireGuard);
+        appliedSnapshot.DomainRules[0].Enabled.Should().BeTrue();
+        appliedSnapshot.LastKnownResolvedIps["applied.example"].Should().Equal("198.51.100.20");
+    }
 }

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\WireguardSplitTunnel.Core\WireguardSplitTunnel.Core.csproj" />
+    <ProjectReference Include="..\WireguardSplitTunnel.WindowsUpdate\WireguardSplitTunnel.WindowsUpdate.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

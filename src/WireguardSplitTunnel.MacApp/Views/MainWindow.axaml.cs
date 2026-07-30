@@ -468,7 +468,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        appState = RuleStateMutations.Clone(appliedStateStore.Load());
+        appState = RuleStateMutations.CloneForAppliedRollback(appState, appliedStateStore.Load());
         SaveState();
         LoadStateToUi();
         Log("rolled back to last applied snapshot.");
