@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using FluentAssertions;
@@ -115,8 +116,18 @@ public sealed class ReleaseWorkflowContractTests
         var configuration = ReadRepositoryFile(
             "tests/WireguardSplitTunnel.WindowsUpdate.Tests/" +
             "xunit.runner.json");
-        configuration.Should().Contain(
-            "\"parallelAlgorithm\": \"conservative\"");
+        using var runner = JsonDocument.Parse(configuration);
+        runner.RootElement
+            .GetProperty("parallelAlgorithm")
+            .GetString()
+            .Should()
+            .Be("conservative");
+        runner.RootElement.TryGetProperty(
+                "parallelizeTestCollections",
+                out var parallelizeCollections)
+            .Should()
+            .BeTrue();
+        parallelizeCollections.GetBoolean().Should().BeFalse();
     }
 
     [Fact]
