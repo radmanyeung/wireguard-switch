@@ -61,6 +61,65 @@ public sealed class ReleaseWorkflowContractTests
     }
 
     [Fact]
+    public void AppReflectionFixture_DoesNotAssumeRepositoryWasPreviouslyRestored()
+    {
+        var source = ReadRepositoryFile(
+            "tests/WireguardSplitTunnel.WindowsUpdate.Tests/" +
+            "PrivilegedEntrypointGuardTests.cs");
+        var helperStart = IndexOf(
+            source,
+            "private string BuildAppForReflection()");
+        var helperEnd = IndexOf(
+            source,
+            "private static string ExtractBetween(");
+        var helper = source[helperStart..helperEnd];
+
+        helper.Should().NotContain("\"--no-restore\"");
+    }
+
+    [Fact]
+    public void WindowsUpdaterTests_UseConservativeParallelScheduling()
+    {
+        var project = XDocument.Parse(
+            ReadRepositoryFile(
+                "tests/WireguardSplitTunnel.WindowsUpdate.Tests/" +
+                "WireguardSplitTunnel.WindowsUpdate.Tests.csproj"));
+        var packages = project.Root!
+            .Descendants("PackageReference")
+            .Where(reference =>
+                reference.Attribute("Include") is not null)
+            .ToDictionary(
+                reference => reference.Attribute("Include")!.Value,
+                reference => Version.Parse(
+                    reference.Attribute("Version")!.Value),
+                StringComparer.Ordinal);
+        var configurationItem = project.Root!
+            .Descendants("None")
+            .SingleOrDefault(item => string.Equals(
+                item.Attribute("Update")?.Value,
+                "xunit.runner.json",
+                StringComparison.Ordinal));
+
+        configurationItem.Should().NotBeNull();
+        configurationItem!
+            .Element("CopyToOutputDirectory")!
+            .Value
+            .Should()
+            .Be("PreserveNewest");
+        packages["xunit"].Should().BeGreaterThanOrEqualTo(
+            new Version(2, 8));
+        packages["xunit.runner.visualstudio"]
+            .Should()
+            .BeGreaterThanOrEqualTo(new Version(2, 8));
+
+        var configuration = ReadRepositoryFile(
+            "tests/WireguardSplitTunnel.WindowsUpdate.Tests/" +
+            "xunit.runner.json");
+        configuration.Should().Contain(
+            "\"parallelAlgorithm\": \"conservative\"");
+    }
+
+    [Fact]
     public void Workflow_ValidatesVersionCompatibilityAndPublishesBothWindowsExecutables()
     {
         var workflow = ReadRepositoryFile(".github/workflows/release-prebuilt.yml");

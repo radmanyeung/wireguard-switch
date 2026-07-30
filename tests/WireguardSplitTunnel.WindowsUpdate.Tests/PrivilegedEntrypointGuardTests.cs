@@ -1330,7 +1330,6 @@ public sealed class PrivilegedEntrypointGuardTests : IDisposable
                              + "WireguardSplitTunnel.App.csproj"),
                      "-c",
                      "Release",
-                     "--no-restore",
                      "-m:1",
                      $"-p:OutDir={outputDirectory}"
                          + Path.DirectorySeparatorChar,
