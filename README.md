@@ -22,6 +22,30 @@ Installer bootstrap does:
 - create desktop shortcuts (unless skipped)
 - launch post-install self test (unless skipped)
 
+## New-machine install checklist (Windows)
+
+Lessons from real fresh-machine installs:
+
+1. Install **WireGuard for Windows** first (https://www.wireguard.com/install/).
+   The installer refuses to continue without it.
+2. Download `wireguard-split-tunnel-win-x64.zip` from GitHub **Releases**
+   (not the source-code ZIP from the `Code` button).
+3. Extract the ZIP into a **brand-new empty folder**. Never extract over an
+   existing folder and never add files into it afterwards: the installer is
+   fail-closed and rejects any file that is not declared in the release
+   manifest (`Release package contains an undeclared payload: ...`).
+4. Double-click `install.cmd` and approve the UAC prompt. Since v0.2.3 the
+   window stays open on failure so you can read the error; details are also
+   in `%LOCALAPPDATA%\WireguardSplitTunnel\logs\`.
+5. After a successful install, start the app from the **desktop shortcut**
+   (or `C:\Program Files\WireguardSplitTunnel\start.cmd`). The `start.cmd`
+   in the extracted folder is not an entry point and always refuses.
+6. Put your `.conf` files in
+   `C:\Program Files\WireGuard\Data\Configurations\` (or pick any file with
+   the app's **Browse** button), then click **Refresh Configs** in the app.
+   Configs whose `AllowedIPs` would trigger the WireGuard kill switch are
+   sanitized automatically; the original file is never modified.
+
 ## If someone downloads from GitHub
 - If they download the repository source (`Code` -> `Download ZIP`), they should extract it first, then run `install.cmd`.
 - After install finishes, start the app from the desktop shortcut (or `start.cmd` inside the installed copy at `C:\Program Files\WireguardSplitTunnel`). The `start.cmd` in the downloaded/extracted folder is not a launch entry point and will refuse to start by design.
