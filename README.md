@@ -24,7 +24,7 @@ Installer bootstrap does:
 
 ## If someone downloads from GitHub
 - If they download the repository source (`Code` -> `Download ZIP`), they should extract it first, then run `install.cmd`.
-- After install finishes, start the app with `start.cmd`.
+- After install finishes, start the app from the desktop shortcut (or `start.cmd` inside the installed copy at `C:\Program Files\WireguardSplitTunnel`). The `start.cmd` in the downloaded/extracted folder is not a launch entry point and will refuse to start by design.
 - On first launch, select a WireGuard `.conf` or `.conf.dpapi` file, then click `Enable Now`.
 - If the target PC already has a published `WireguardSplitTunnel\WireguardSplitTunnel.App.exe`, install will use it.
 - If no local EXE is present, install/start will try to fetch the latest GitHub Release prebuilt automatically.
@@ -34,7 +34,7 @@ Installer bootstrap does:
 - Download the latest `wireguard-split-tunnel-win-x64.zip` from GitHub Releases.
 - Extract the ZIP first.
 - Run `install.cmd` from the extracted folder.
-- After install finishes, run `start.cmd`.
+- After install finishes, start the app from the desktop shortcut (or `start.cmd` inside `C:\Program Files\WireguardSplitTunnel`), not from the extracted folder.
 - The Release ZIP includes the published app, helper scripts, and installer/startup wrappers.
 - Installer will automatically try to remove the Windows download block (`Unblock-File`) from the extracted release files.
 

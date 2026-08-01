@@ -2670,7 +2670,7 @@ function Copy-WgstBoundManagedFile {
                     $buffer,
                     0,
                     $buffer.Length)) -gt 0) {
-            $length = checked($length + $read)
+            $length = $length + $read
             if ($length -gt [long]$Source.Length) {
                 throw 'Bound Release payload exceeded its declared length.'
             }

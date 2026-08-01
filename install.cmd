@@ -10,6 +10,7 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "%PS_EXE%" (
     echo [INSTALL] Trusted Windows PowerShell is missing.
     echo [INSTALL] Trusted Windows PowerShell is missing. > "%LOG_FILE%"
+    pause
     exit /b 9009
 )
 echo [%date% %time%] [INSTALL.CMD] launching install.ps1 > "%LOG_FILE%"
@@ -20,6 +21,7 @@ if not "%EXIT_CODE%"=="0" (
     echo [INSTALL] install.cmd failed with exit code %EXIT_CODE%.
     echo [INSTALL] install.cmd failed with exit code %EXIT_CODE%. >> "%LOG_FILE%"
     echo See log: "%LOG_FILE%"
+    pause
 )
 
 exit /b %EXIT_CODE%

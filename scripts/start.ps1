@@ -865,8 +865,10 @@ function Invoke-WgstStartupGate {
     if (-not $SupportedLauncherRoot) {
         throw (
             'Privileged startup is allowed only from the installed protected ' +
-            'copy or an explicit developer source checkout. Run install.cmd ' +
-            'before starting a bundled Release.')
+            'copy or an explicit developer source checkout. If you have not ' +
+            'run install.cmd yet, run it first. If install already completed, ' +
+            'start the app from the desktop shortcut or from start.cmd inside ' +
+            'C:\Program Files\WireguardSplitTunnel instead of this folder.')
     }
 
     if (-not $IsAdministrator) {

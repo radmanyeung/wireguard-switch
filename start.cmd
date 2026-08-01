@@ -7,6 +7,7 @@ set "LOG_FILE=%LOG_DIR%\start.cmd.log"
 set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 if not exist "%PS_EXE%" (
     echo [START.CMD] Windows PowerShell is unavailable. 1>&2
+    pause
     endlocal
     exit /b 1
 )
@@ -20,6 +21,8 @@ if not "%EXIT_CODE%"=="0" (
     echo [START.CMD] failed with exit code %EXIT_CODE%. >> "%LOG_FILE%"
     echo [START.CMD] failed with exit code %EXIT_CODE%.
     echo See log: "%LOG_FILE%"
+    echo If install already completed, start the app from the desktop shortcut or C:\Program Files\WireguardSplitTunnel\start.cmd instead.
+    pause
 )
 
 exit /b %EXIT_CODE%
