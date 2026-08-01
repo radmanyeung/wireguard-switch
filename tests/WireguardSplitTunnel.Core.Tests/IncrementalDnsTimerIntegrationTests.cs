@@ -42,8 +42,11 @@ public sealed class IncrementalDnsTimerIntegrationTests
         closingMethod.Should().Contain("dnsCacheLearningTimer.Stop();");
         closingMethod.Should().Contain("dnsCacheLearningCts.Cancel();");
         closingMethod.Should().Contain(
-            "await applicationCloseOrchestrator");
+            "applicationCloseOrchestrator");
         closingMethod.Should().Contain(".RunOnceAsync(");
+        // Close must never hang on a stuck restore: orchestration is
+        // cancellable and the window force-closes after a hard timeout.
+        closingMethod.Should().Contain("Task.WhenAny(");
         closingMethod.Should().NotContain(
             "DomainRouteOperationSerializer.RunAsync");
 

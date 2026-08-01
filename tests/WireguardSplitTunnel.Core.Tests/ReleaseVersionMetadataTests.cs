@@ -8,8 +8,14 @@ public sealed class ReleaseVersionMetadataTests
     [Fact]
     public void CentralReleaseContract_IsInitialUpdaterCapableVersion()
     {
-        ReadCentralProperty("VersionPrefix").Should().Be("0.2.0");
-        ReadCentralProperty("MinimumAutoUpdateVersion").Should().Be("0.2.0");
+        // VersionPrefix moves forward with each release; the auto-update
+        // floor and the rollback floor stay pinned at the initial
+        // updater-capable version.
+        var versionPrefix = ReadCentralProperty("VersionPrefix");
+        var minimumAutoUpdate = ReadCentralProperty("MinimumAutoUpdateVersion");
+        Version.Parse(versionPrefix).Should()
+            .BeGreaterThanOrEqualTo(Version.Parse(minimumAutoUpdate));
+        minimumAutoUpdate.Should().Be("0.2.0");
         ReadCentralProperty("RollbackCompatibleFromVersion").Should().Be("0.2.0");
         ReadCentralProperty("StateSchemaVersion").Should().Be("1");
     }

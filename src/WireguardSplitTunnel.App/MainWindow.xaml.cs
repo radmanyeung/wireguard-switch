@@ -209,10 +209,28 @@ public partial class MainWindow : Window
 
         try
         {
-            var result =
-                await applicationCloseOrchestrator
-                    .RunOnceAsync(CancellationToken.None);
-            LogApplicationCloseResult(result);
+            // Never let a stuck restore (unhealthy tunnel, hung route command,
+            // or a renew/apply still holding the routing semaphores) trap the
+            // GUI: cancel orchestration after 15s and force the window closed
+            // after 20s regardless.
+            using var closeTimeoutCts =
+                new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var runTask = applicationCloseOrchestrator
+                .RunOnceAsync(closeTimeoutCts.Token);
+            var completedTask = await Task.WhenAny(
+                runTask,
+                Task.Delay(TimeSpan.FromSeconds(20)));
+            if (completedTask == runTask)
+            {
+                var result = runTask.Result;
+                LogApplicationCloseResult(result);
+            }
+            else
+            {
+                logger.Error(
+                    "Application close orchestration timed out; "
+                    + "closing without waiting for route restore.");
+            }
         }
         catch (Exception ex)
         {
@@ -273,6 +291,13 @@ public partial class MainWindow : Window
             if (!isWindowClosing)
             {
                 dnsCacheLearningTimer.Start();
+                // The WireGuard service outlives the app, so the tunnel may
+                // already be up when the app starts. No network-change event
+                // fires in that case and enabled software rules would never
+                // be re-applied. Kick one re-apply through the normal
+                // debounced path so startup always restores software split
+                // tunneling.
+                ScheduleSoftwareReapply("startup");
             }
         }
     }

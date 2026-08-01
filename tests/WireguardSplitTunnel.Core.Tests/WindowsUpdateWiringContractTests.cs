@@ -113,8 +113,11 @@ public sealed class WindowsUpdateWiringContractTests
         closing.Should().Contain(
             "closeIntentTracker.ResolveNormalClose();");
         closing.Should().Contain(
-            "await applicationCloseOrchestrator");
+            "applicationCloseOrchestrator");
         closing.Should().Contain(".RunOnceAsync(");
+        // Close must never hang on a stuck restore: orchestration is
+        // cancellable and the window force-closes after a hard timeout.
+        closing.Should().Contain("Task.WhenAny(");
         closing.Should().Contain(
             "LogApplicationCloseResult(result);");
         closing.Should().NotContain(

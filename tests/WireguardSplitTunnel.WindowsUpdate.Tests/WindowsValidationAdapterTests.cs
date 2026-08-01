@@ -93,7 +93,7 @@ public sealed class WindowsValidationAdapterTests
     {
         var path = Path.Combine(AppContext.BaseDirectory, "WireguardSplitTunnel.TestProcess.dll");
 
-        new WindowsExecutableProductVersionReader().ReadProductVersion(path).Should().Be("0.2.0");
+        new WindowsExecutableProductVersionReader().ReadProductVersion(path).Should().Be(CentralVersionPrefix());
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class WindowsValidationAdapterTests
 
         new WindowsExecutableProductVersionReader()
             .ReadProductVersion(stream)
-            .Should().Be("0.2.0");
+            .Should().Be(CentralVersionPrefix());
 
         stream.Position.Should().Be(position);
     }
@@ -288,5 +288,25 @@ public sealed class WindowsValidationAdapterTests
             {
             }
         }
+    }
+
+    private static string CentralVersionPrefix()
+    {
+        var directory = AppContext.BaseDirectory;
+        while (!string.IsNullOrWhiteSpace(directory))
+        {
+            var propsPath = System.IO.Path.Combine(directory, "Directory.Build.props");
+            if (File.Exists(propsPath)
+                && Directory.Exists(System.IO.Path.Combine(directory, "src"))
+                && Directory.Exists(System.IO.Path.Combine(directory, "tests")))
+            {
+                var props = System.Xml.Linq.XDocument.Load(propsPath);
+                return props.Root!.Element("PropertyGroup")!.Element("VersionPrefix")!.Value;
+            }
+
+            directory = Directory.GetParent(directory)?.FullName;
+        }
+
+        throw new InvalidOperationException("Repository root was not found.");
     }
 }
