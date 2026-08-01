@@ -853,6 +853,14 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Never hand wireguard.exe a config whose AllowedIPs can trigger the
+        // Windows root-tunnel kill switch (0.0.0.0/0 or ::/0 blocks ALL
+        // untunneled traffic, LAN included). Install from a sanitized derived
+        // copy instead; the user's original file is never modified.
+        selectedPath = WireguardAllowedIpsSanitizer.EnsureSanitizedConfigFile(
+            selectedPath,
+            WireguardAllowedIpsSanitizer.GetDefaultDerivedConfigDirectory());
+
         var wireguardExePath = ResolveWireguardExecutablePath();
         if (string.IsNullOrWhiteSpace(wireguardExePath))
         {
