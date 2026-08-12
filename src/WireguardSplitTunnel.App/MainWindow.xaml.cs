@@ -958,13 +958,18 @@ public partial class MainWindow : Window
                 logger.Info($"Enable Now: uninstalling existing tunnel service(s): {string.Join(", ", installedTunnels)}");
             }
 
+            // cmd /c strips the FIRST and LAST quote of the whole remainder
+            // when the chain contains '&' and multiple quoted paths, which
+            // breaks the first command ("C:\Program" not recognized). Wrap
+            // the entire chain in one extra pair of quotes so cmd strips
+            // that sacrificial pair and leaves every inner quote intact.
             var startInfo = new ProcessStartInfo
             {
                 FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
-                Arguments = "/c " + WindowsEnableTunnelCommandBuilder.BuildArguments(
+                Arguments = "/c \"" + WindowsEnableTunnelCommandBuilder.BuildArguments(
                     wireguardExePath,
                     selectedPath,
-                    installedTunnels),
+                    installedTunnels) + "\"",
                 UseShellExecute = true,
                 Verb = "runas",
                 WindowStyle = ProcessWindowStyle.Hidden
