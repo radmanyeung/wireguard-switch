@@ -948,12 +948,26 @@ public partial class MainWindow : Window
 
         try
         {
+            // Enable Now means "run exactly the tunnel I selected": uninstall
+            // every installed WireGuard tunnel service first (a stale tunnel
+            // like nordusa1 would otherwise keep running and get adopted),
+            // then install the selected config.
+            var installedTunnels = WindowsTunnelServiceDiscovery.ListInstalledTunnelNames();
+            if (installedTunnels.Count > 0)
+            {
+                logger.Info($"Enable Now: uninstalling existing tunnel service(s): {string.Join(", ", installedTunnels)}");
+            }
+
             var startInfo = new ProcessStartInfo
             {
-                FileName = wireguardExePath,
-                Arguments = WireguardConfigCatalog.BuildInstallTunnelArgs(selectedPath),
+                FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                Arguments = "/c " + WindowsEnableTunnelCommandBuilder.BuildArguments(
+                    wireguardExePath,
+                    selectedPath,
+                    installedTunnels),
                 UseShellExecute = true,
-                Verb = "runas"
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
             };
 
             Process.Start(startInfo);
