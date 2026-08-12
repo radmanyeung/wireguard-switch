@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <VersionPrefix>0.2.4</VersionPrefix>
+    <VersionPrefix>0.2.5</VersionPrefix>
     <MinimumAutoUpdateVersion>0.2.0</MinimumAutoUpdateVersion>
     <RollbackCompatibleFromVersion>0.2.0</RollbackCompatibleFromVersion>
     <StateSchemaVersion>1</StateSchemaVersion>
