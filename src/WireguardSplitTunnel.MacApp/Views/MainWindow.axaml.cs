@@ -105,6 +105,58 @@ public partial class MainWindow : Window
         Log("config list refreshed.");
     }
 
+    private void RefreshCustomFolderOptions()
+    {
+        CustomFolderCombo.ItemsSource = appState.CustomConfigDirectories.ToList();
+    }
+
+    private async void OnAddCustomFolderClick(object? sender, RoutedEventArgs e)
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Select extra folder to scan for WireGuard configs",
+            AllowMultiple = false
+        });
+
+        if (folders.Count == 0)
+        {
+            return;
+        }
+
+        var folder = folders[0].Path.LocalPath;
+        if (string.IsNullOrWhiteSpace(folder)
+            || appState.CustomConfigDirectories.Contains(folder, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        appState = appState with { CustomConfigDirectories = [..appState.CustomConfigDirectories, folder] };
+        SaveState();
+        RefreshCustomFolderOptions();
+        RefreshTunnelConfigRows(selectedConfigPath);
+        Log($"extra scan folder added: {folder}");
+    }
+
+    private void OnRemoveCustomFolderClick(object? sender, RoutedEventArgs e)
+    {
+        var selected = CustomFolderCombo.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            return;
+        }
+
+        appState = appState with
+        {
+            CustomConfigDirectories = appState.CustomConfigDirectories
+                .Where(dir => !string.Equals(dir, selected, StringComparison.OrdinalIgnoreCase))
+                .ToList()
+        };
+        SaveState();
+        RefreshCustomFolderOptions();
+        RefreshTunnelConfigRows(selectedConfigPath);
+        Log($"extra scan folder removed: {selected}");
+    }
+
     private void OnConfigSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (suppressConfigSelectionChanged)
@@ -129,7 +181,8 @@ public partial class MainWindow : Window
         StartAiVpnButton.IsEnabled = false;
         try
         {
-            var discoveredConfigs = WireguardConfigCatalog.DiscoverConfigPaths();
+            var discoveredConfigs = WireguardConfigCatalog.DiscoverConfigPaths(
+                WireguardConfigCatalog.GetEffectiveConfigDirectories(appState.CustomConfigDirectories));
             var currentSelection = (ConfigCombo.SelectedItem as TunnelConfigRow)?.Path
                                    ?? selectedConfigPath
                                    ?? appState.SelectedTunnelConfigPath;
@@ -175,7 +228,7 @@ public partial class MainWindow : Window
 
     private async Task<IStorageFolder?> ResolveInitialFolderAsync()
     {
-        foreach (var dir in WireguardConfigCatalog.DefaultConfigDirectories)
+        foreach (var dir in WireguardConfigCatalog.GetEffectiveConfigDirectories(appState.CustomConfigDirectories))
         {
             if (!Directory.Exists(dir))
             {
@@ -811,6 +864,7 @@ public partial class MainWindow : Window
         RefreshTunnelConfigRows(selectedConfigPath);
         RefreshDomainRows();
         RefreshMacSoftwareRows();
+        RefreshCustomFolderOptions();
 
         suppressRestoreOnExitChanged = true;
         try
@@ -836,7 +890,8 @@ public partial class MainWindow : Window
 
     private void RefreshTunnelConfigRows(string? preferredPath = null)
     {
-        var discovered = WireguardConfigCatalog.DiscoverConfigPaths();
+        var discovered = WireguardConfigCatalog.DiscoverConfigPaths(
+            WireguardConfigCatalog.GetEffectiveConfigDirectories(appState.CustomConfigDirectories));
         if (!string.IsNullOrWhiteSpace(selectedConfigPath)
             && File.Exists(selectedConfigPath)
             && !discovered.Contains(selectedConfigPath, StringComparer.OrdinalIgnoreCase))
@@ -927,8 +982,9 @@ public partial class MainWindow : Window
         Log($"applied {plan.ToAdd.Count} route(s) on {iface}; removed {plan.ToRemove.Count}; resolved {resolvedRules.Count} rule(s).");
     }
 
-    private static bool IsDiscoveredConfigPath(string path) =>
-        WireguardConfigCatalog.DiscoverConfigPaths()
+    private bool IsDiscoveredConfigPath(string path) =>
+        WireguardConfigCatalog.DiscoverConfigPaths(
+                WireguardConfigCatalog.GetEffectiveConfigDirectories(appState.CustomConfigDirectories))
             .Contains(path, StringComparer.OrdinalIgnoreCase);
 
     private void RefreshDomainRows()

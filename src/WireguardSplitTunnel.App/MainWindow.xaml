@@ -65,6 +65,24 @@
                     <CheckBox x:Name="RestoreOnExitCheckBox"
                               Margin="0,6,0,0"
                               Content="Restore normal routing when app exits" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <TextBlock Text="Extra scan folders:"
+                                   VerticalAlignment="Center"
+                                   FontSize="12"
+                                   Foreground="#46607A" />
+                        <ComboBox x:Name="CustomFolderCombo"
+                                  MinWidth="220"
+                                  Margin="8,0,0,0"
+                                  VerticalAlignment="Center" />
+                        <Button x:Name="AddCustomFolderButton"
+                                Content="Add..."
+                                Margin="8,0,0,0"
+                                Padding="8,2" />
+                        <Button x:Name="RemoveCustomFolderButton"
+                                Content="Remove"
+                                Margin="6,0,0,0"
+                                Padding="8,2" />
+                    </StackPanel>
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Margin="12,0,0,0">

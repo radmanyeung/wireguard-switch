@@ -148,6 +148,8 @@ public partial class MainWindow : Window
 
         RefreshConfigsButton.Click += OnRefreshConfigsClicked;
         BrowseConfigButton.Click += OnBrowseConfigClicked;
+        AddCustomFolderButton.Click += OnAddCustomFolderClicked;
+        RemoveCustomFolderButton.Click += OnRemoveCustomFolderClicked;
         EnableTunnelButton.Click += OnEnableTunnelClicked;
         SaveTempButton.Click += OnSaveTempClicked;
         LoadTempButton.Click += OnLoadTempClicked;
@@ -736,6 +738,7 @@ public partial class MainWindow : Window
         LoadWindowsUpdateSettingsToUi();
         UnifiedGlobalModeCombo.SelectedIndex = mode == DomainRouteMode.UseWireGuard ? 0 : 1;
 
+        RefreshCustomFolderOptions();
         RefreshTunnelConfigOptions();
         if (!string.IsNullOrWhiteSpace(state.SelectedTunnelConfigPath))
         {
@@ -747,7 +750,8 @@ public partial class MainWindow : Window
 
     private void RefreshTunnelConfigOptions()
     {
-        var discovered = WireguardConfigCatalog.DiscoverConfigPaths();
+        var discovered = WireguardConfigCatalog.DiscoverConfigPaths(
+            WireguardConfigCatalog.GetEffectiveConfigDirectories(state.CustomConfigDirectories));
 
         if (!string.IsNullOrWhiteSpace(state.SelectedTunnelConfigPath)
             && File.Exists(state.SelectedTunnelConfigPath)
@@ -786,6 +790,55 @@ public partial class MainWindow : Window
 
         state = state with { SelectedTunnelConfigPath = dialog.FileName };
         SaveStateAndRefreshConfigSelection(dialog.FileName);
+    }
+
+    private void RefreshCustomFolderOptions()
+    {
+        CustomFolderCombo.ItemsSource = state.CustomConfigDirectories.ToList();
+    }
+
+    private void OnAddCustomFolderClicked(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Select extra folder to scan for WireGuard configs"
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        var folder = dialog.FolderName;
+        if (string.IsNullOrWhiteSpace(folder)
+            || state.CustomConfigDirectories.Contains(folder, StringComparer.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        state = state with { CustomConfigDirectories = [..state.CustomConfigDirectories, folder] };
+        stateStore.Save(state);
+        RefreshCustomFolderOptions();
+        RefreshTunnelConfigOptions();
+    }
+
+    private void OnRemoveCustomFolderClicked(object sender, RoutedEventArgs e)
+    {
+        var selected = CustomFolderCombo.SelectedItem as string;
+        if (string.IsNullOrWhiteSpace(selected))
+        {
+            return;
+        }
+
+        state = state with
+        {
+            CustomConfigDirectories = state.CustomConfigDirectories
+                .Where(dir => !string.Equals(dir, selected, StringComparison.OrdinalIgnoreCase))
+                .ToList()
+        };
+        stateStore.Save(state);
+        RefreshCustomFolderOptions();
+        RefreshTunnelConfigOptions();
     }
 
     private void OnTunnelConfigSelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)

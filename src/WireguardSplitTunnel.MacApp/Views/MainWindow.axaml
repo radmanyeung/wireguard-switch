@@ -54,6 +54,12 @@
                         Foreground="White"/>
               </Grid>
               <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="Extra scan folders:" VerticalAlignment="Center" Foreground="#666" FontSize="12"/>
+                <ComboBox Name="CustomFolderCombo" MinWidth="260"/>
+                <Button Name="AddCustomFolderButton" Content="Add..." Click="OnAddCustomFolderClick" MinWidth="70"/>
+                <Button Name="RemoveCustomFolderButton" Content="Remove" Click="OnRemoveCustomFolderClick" MinWidth="80"/>
+              </StackPanel>
+              <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Name="EnableTunnelButton" Content="Enable Tunnel" Click="OnEnableTunnelClick" MinWidth="130"/>
                 <Button Name="DisableTunnelButton" Content="Disable Tunnel" Click="OnDisableTunnelClick" MinWidth="130"/>
                 <Button Content="Refresh Status" Click="OnRefreshStatusClick" MinWidth="120"/>

@@ -20,6 +20,30 @@ public static class WireguardConfigCatalog
     public static IReadOnlyList<string> DefaultConfigDirectories =>
         PlatformRuntime.IsMacOS ? MacDefaultConfigDirectories : WindowsDefaultConfigDirectories;
 
+    public static List<string> GetEffectiveConfigDirectories(IEnumerable<string>? customDirectories)
+    {
+        var directories = DefaultConfigDirectories.ToList();
+        if (customDirectories is null)
+        {
+            return directories;
+        }
+
+        foreach (var directory in customDirectories)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                continue;
+            }
+
+            if (!directories.Contains(directory, StringComparer.OrdinalIgnoreCase))
+            {
+                directories.Add(directory);
+            }
+        }
+
+        return directories;
+    }
+
     public static string GetTunnelName(string configPath)
     {
         var trimmedPath = configPath.TrimEnd('\\', '/');

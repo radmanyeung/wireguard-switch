@@ -177,6 +177,40 @@ public sealed class StateStoreTests
     }
 
     [Fact]
+    public void SaveAndLoad_RoundTripsCustomConfigDirectories()
+    {
+        var path = CreateTestPath();
+        var store = new StateStore(path);
+        var original = new AppState([], [], []) with
+        {
+            CustomConfigDirectories = ["D:\\vpn-configs", "E:\\more\\configs"]
+        };
+
+        store.Save(original);
+
+        store.Load().CustomConfigDirectories.Should().Equal("D:\\vpn-configs", "E:\\more\\configs");
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Load_OldStateFileWithoutCustomConfigDirectories_DefaultsToEmpty()
+    {
+        var path = CreateTestPath();
+        File.WriteAllText(path, """{ "DomainRules": [] }""");
+
+        new StateStore(path).Load().CustomConfigDirectories.Should().BeEmpty();
+
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void SaveAndLoad_RoundTripsActiveSplitTunnelCleanupDebt()
     {
         var path = CreateTestPath();

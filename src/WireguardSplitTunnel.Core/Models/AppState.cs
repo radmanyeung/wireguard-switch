@@ -24,7 +24,10 @@ public sealed record AppState(
     // Exact pre-raw-tunnel DNS/search-domain state. This stores only resolver
     // values and config identity, never WireGuard config text or private keys.
     MacRawTunnelDnsCleanupDebt? RawTunnelDnsCleanupDebt = null,
-    bool AutoUpdateEnabled = true)
+    bool AutoUpdateEnabled = true,
+    // Extra user-added folders scanned for .conf / .conf.dpapi files, on top
+    // of the platform defaults in WireguardConfigCatalog.
+    List<string>? CustomConfigDirectories = null)
 {
     public Dictionary<string, List<ResolvedIpDetail>> LastKnownResolvedIpDetails { get; init; } =
         LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(StringComparer.OrdinalIgnoreCase);
@@ -35,6 +38,8 @@ public sealed record AppState(
 
     public List<MacDomainProfileAssignment> MacDomainProfileAssignments { get; init; } =
         MacDomainProfileAssignments ?? [];
+
+    public List<string> CustomConfigDirectories { get; init; } = CustomConfigDirectories ?? [];
 }
 
 public sealed record ManagedRouteEntry(

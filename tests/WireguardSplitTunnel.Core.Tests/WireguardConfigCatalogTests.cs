@@ -71,4 +71,35 @@ public sealed class WireguardConfigCatalogTests
             }
         }
     }
+
+    [Fact]
+    public void GetEffectiveConfigDirectories_NullCustom_ReturnsDefaultsOnly()
+    {
+        var effective = WireguardConfigCatalog.GetEffectiveConfigDirectories(null);
+
+        effective.Should().BeEquivalentTo(WireguardConfigCatalog.DefaultConfigDirectories);
+    }
+
+    [Fact]
+    public void GetEffectiveConfigDirectories_AppendsCustomAfterDefaults()
+    {
+        var effective = WireguardConfigCatalog.GetEffectiveConfigDirectories(["D:\\vpn-configs"]);
+
+        effective.Take(WireguardConfigCatalog.DefaultConfigDirectories.Count)
+            .Should().BeEquivalentTo(WireguardConfigCatalog.DefaultConfigDirectories);
+        effective.Last().Should().Be("D:\\vpn-configs");
+    }
+
+    [Fact]
+    public void GetEffectiveConfigDirectories_SkipsBlankAndDedupesCaseInsensitive()
+    {
+        var defaultDir = WireguardConfigCatalog.DefaultConfigDirectories[0];
+        var duplicateDefault = defaultDir.ToUpperInvariant();
+
+        var effective = WireguardConfigCatalog.GetEffectiveConfigDirectories(
+            ["", "   ", duplicateDefault, "D:\\vpn-configs", "d:\\VPN-CONFIGS"]);
+
+        effective.Should().HaveCount(WireguardConfigCatalog.DefaultConfigDirectories.Count + 1);
+        effective.Last().Should().Be("D:\\vpn-configs");
+    }
 }
