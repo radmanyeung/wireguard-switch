@@ -105,14 +105,30 @@ downloaded ZIP and fixed-name `.sha256` sidecar must both match it. This detects
 corruption and mixed-up downloads, but is not independent publisher signing.
 Authenticode signing remains a future hardening option.
 
-The macOS package has no automatic updater. Download and install each macOS
-Release manually.
+The macOS package has no in-app automatic updater. Use the one-line installer
+below for both install and update.
 
 ## macOS Apple Silicon release
 
 Download `wireguard-split-tunnel-mac-arm64.zip` from GitHub Releases and extract
 it first. The package is for Apple Silicon Macs and is self-contained, so the
 .NET SDK is not required.
+
+### One-line install / update
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/radmanyeung/wireguard-switch/main/scripts/install-mac.sh | bash
+```
+
+This downloads the latest Release, installs it to
+`~/Applications/wireguard-split-tunnel-mac-arm64`, and removes the macOS
+quarantine flag. Re-run the same command anytime to update. Then open the app:
+
+```bash
+open "$HOME/Applications/wireguard-split-tunnel-mac-arm64/WireguardSplitTunnel.app"
+```
+
+The rest of this section covers the manual alternative and first-time setup.
 
 The release does not include a WireGuard `.conf` file. Configurations normally
 contain private keys, so download or export a real configuration from your VPN
