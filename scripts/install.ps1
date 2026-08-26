@@ -155,6 +155,46 @@ function Get-DotnetCommand {
 
     return $null
 }
+function Install-WireGuardForWindows {
+    Write-Step 'WireGuard for Windows not found; downloading installer...'
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.SecurityProtocolType]::Tls12
+    $listing = Invoke-WebRequest -UseBasicParsing `
+        -Uri 'https://download.wireguard.com/windows-client/'
+    $names = @([regex]::Matches(
+        $listing.Content,
+        'wireguard-amd64-[0-9]+(?:\.[0-9]+)*\.msi') |
+        ForEach-Object { $_.Value } | Sort-Object -Unique)
+    if ($names.Count -eq 0) {
+        throw 'Could not find a WireGuard MSI on the official download page.'
+    }
+    $latest = @($names | Sort-Object {
+        $versionText = [regex]::Match(
+            $_, '[0-9]+(?:\.[0-9]+)*').Value
+        try { [version]$versionText } catch { [version]'0.0' }
+    } | Select-Object -Last 1)[0]
+    $msiPath = Join-Path $env:TEMP $latest
+    Invoke-WebRequest -UseBasicParsing `
+        -Uri "https://download.wireguard.com/windows-client/$latest" `
+        -OutFile $msiPath
+    Write-Step "Installing WireGuard for Windows ($latest)..."
+    try {
+        $process = Start-Process -FilePath 'msiexec.exe' `
+            -ArgumentList '/i', ('"' + $msiPath + '"'),
+                'DO_NOT_LAUNCH=1', '/qn', '/norestart' `
+            -Wait -PassThru
+    }
+    finally {
+        Remove-Item -LiteralPath $msiPath -Force `
+            -ErrorAction SilentlyContinue
+    }
+    if ($process.ExitCode -ne 0) {
+        throw (
+            'WireGuard installer failed with exit code ' +
+            "$($process.ExitCode).")
+    }
+}
+
 
 function Get-DotnetSdkCount {
     param([string]$DotnetPath)
@@ -703,8 +743,12 @@ if ($installMode -eq 'PublishSource' -and -not $hasSdk) {
 
 $wireGuardPath = Get-WireGuardCliPath
 if ([string]::IsNullOrWhiteSpace($wireGuardPath)) {
+    Install-WireGuardForWindows
+    $wireGuardPath = Get-WireGuardCliPath
+}
+if ([string]::IsNullOrWhiteSpace($wireGuardPath)) {
     throw (
-        'WireGuard for Windows was not found under Program Files. ' +
+        'WireGuard for Windows could not be installed automatically. ' +
         'Install it from https://www.wireguard.com/install/ and run ' +
         'install.cmd again.')
 }
