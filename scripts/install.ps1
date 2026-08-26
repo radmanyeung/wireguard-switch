@@ -452,23 +452,25 @@ $installedRoot = & $module {
 } $payload $repairBootstrap
 $installedScript = Join-Path $installedRoot 'scripts\install.ps1'
 try {
-    $childArguments = @('-Elevated', '-ProtectedInstalledCopy')
+    $childArguments = [ordered]@{
+        Elevated = $true
+        ProtectedInstalledCopy = $true
+    }
     if ([bool]$payload.skipPublish) {
-        $childArguments += '-SkipPublish'
+        $childArguments.SkipPublish = $true
     }
     if ([bool]$payload.forcePublish) {
-        $childArguments += '-ForcePublish'
+        $childArguments.ForcePublish = $true
     }
     if ([bool]$payload.repairBlockedUpdate) {
-        $childArguments += @(
-            '-RepairBlockedUpdate',
-            '-ProtectedRepairBootstrap')
+        $childArguments.RepairBlockedUpdate = $true
+        $childArguments.ProtectedRepairBootstrap = $true
     }
     if ([bool]$payload.noDesktopShortcut) {
-        $childArguments += '-NoDesktopShortcut'
+        $childArguments.NoDesktopShortcut = $true
     }
     if ([bool]$payload.noPostInstallSelfTest) {
-        $childArguments += '-NoPostInstallSelfTest'
+        $childArguments.NoPostInstallSelfTest = $true
     }
     & $installedScript @childArguments
     if (-not $?) {
