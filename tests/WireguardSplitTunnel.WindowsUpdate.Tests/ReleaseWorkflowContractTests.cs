@@ -8,10 +8,10 @@ namespace WireguardSplitTunnel.WindowsUpdate.Tests;
 
 public sealed class ReleaseWorkflowContractTests
 {
-    private const string CheckoutSha = "11d5960a326750d5838078e36cf38b85af677262";
-    private const string SetupDotnetSha = "67a3573c9a986a3f9c594539f4ab511d57bb3ce9";
-    private const string UploadArtifactSha = "ea165f8d65b6e75b540449e92b4886f43607fa02";
-    private const string DownloadArtifactSha = "d3f86a106a0bac45b974a628896c90dbdf5c8093";
+    private const string CheckoutSha = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+    private const string SetupDotnetSha = "a98b56852c35b8e3190ac28c8c2271da59106c68";
+    private const string UploadArtifactSha = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+    private const string DownloadArtifactSha = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
     private const string ReleaseSha = "3bb12739c298aeb8a4eeaf626c5b8d85266b0e65";
 
     [Fact]
@@ -21,10 +21,10 @@ public sealed class ReleaseWorkflowContractTests
 
         workflow.Should().MatchRegex(
             @"(?ms)^permissions:\s*\r?\n\s+contents:\s*read\s*$");
-        workflow.Should().Contain($"actions/checkout@{CheckoutSha} # v4");
-        workflow.Should().Contain($"actions/setup-dotnet@{SetupDotnetSha} # v4");
-        workflow.Should().Contain($"actions/upload-artifact@{UploadArtifactSha} # v4");
-        workflow.Should().Contain($"actions/download-artifact@{DownloadArtifactSha} # v4");
+        workflow.Should().Contain($"actions/checkout@{CheckoutSha} # v7");
+        workflow.Should().Contain($"actions/setup-dotnet@{SetupDotnetSha} # v6");
+        workflow.Should().Contain($"actions/upload-artifact@{UploadArtifactSha} # v7");
+        workflow.Should().Contain($"actions/download-artifact@{DownloadArtifactSha} # v8");
         workflow.Should().Contain($"softprops/action-gh-release@{ReleaseSha} # v2");
         Regex.Matches(workflow, @"persist-credentials:\s*false")
             .Should()

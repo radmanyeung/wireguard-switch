@@ -34,6 +34,7 @@ if (-not [IO.Directory]::Exists($trustedModuleRoot) -or
 $env:PSModulePath = $trustedModuleRoot
 foreach ($trustedModuleName in @(
         'Microsoft.PowerShell.Management',
+        'Microsoft.PowerShell.Security',
         'Microsoft.PowerShell.Utility')) {
     $trustedModuleDirectory = [IO.Path]::Combine(
         $trustedModuleRoot,
@@ -173,19 +174,32 @@ function Install-WireGuardForWindows {
             $_, '[0-9]+(?:\.[0-9]+)*').Value
         try { [version]$versionText } catch { [version]'0.0' }
     } | Select-Object -Last 1)[0]
-    $msiPath = Join-Path $env:TEMP $latest
-    Invoke-WebRequest -UseBasicParsing `
-        -Uri "https://download.wireguard.com/windows-client/$latest" `
-        -OutFile $msiPath
-    Write-Step "Installing WireGuard for Windows ($latest)..."
+    $stagingParent = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ProgramFiles)
+    $staging = Join-Path $stagingParent (
+        'WireguardSplitTunnel.wgdl-' +
+        [Guid]::NewGuid().ToString('N'))
+    $msiPath = Join-Path $staging $latest
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
     try {
+        Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://download.wireguard.com/windows-client/$latest" `
+            -OutFile $msiPath
+        $signature = Get-AuthenticodeSignature -LiteralPath $msiPath
+        if ($signature.Status -ne
+                [Management.Automation.SignatureStatus]::Valid -or
+            $null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.Subject -notmatch 'WireGuard') {
+            throw 'WireGuard installer signature validation failed.'
+        }
+        Write-Step "Installing WireGuard for Windows ($latest)..."
         $process = Start-Process -FilePath 'msiexec.exe' `
             -ArgumentList '/i', ('"' + $msiPath + '"'),
                 'DO_NOT_LAUNCH=1', '/qn', '/norestart' `
             -Wait -PassThru
     }
     finally {
-        Remove-Item -LiteralPath $msiPath -Force `
+        Remove-Item -LiteralPath $staging -Recurse -Force `
             -ErrorAction SilentlyContinue
     }
     if ($process.ExitCode -ne 0) {
@@ -409,6 +423,7 @@ if (-not [IO.Directory]::Exists($trustedModuleRoot) -or
 $env:PSModulePath = $trustedModuleRoot
 foreach ($trustedModuleName in @(
         'Microsoft.PowerShell.Management',
+        'Microsoft.PowerShell.Security',
         'Microsoft.PowerShell.Utility')) {
     $trustedModuleDirectory = [IO.Path]::Combine(
         $trustedModuleRoot,

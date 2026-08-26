@@ -772,6 +772,13 @@ public sealed class InstallerBootstrapTests : IDisposable
         install.Should().NotContain("$env:TEMP");
         install.Should().NotContain("dotnet-sdk-win-x64.exe");
         install.Should().NotContain("wireguard-installer.exe");
+        if (install.Contains("msiexec", StringComparison.Ordinal))
+        {
+            install.Should().Contain(
+                "Get-AuthenticodeSignature",
+                "downloaded installers must be signature-validated " +
+                "before elevated execution");
+        }
     }
 
     [Fact]
