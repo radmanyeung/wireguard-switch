@@ -102,9 +102,23 @@ public partial class MainWindow : Window
             runtimeLogCandidates.Add(Path.Combine(baseDirParent, "runtime.log"));
         }
 
+        // Never write beside the executable of a protected installation:
+        // the installer validates C:\Program Files\WireguardSplitTunnel
+        // against the release manifest on every reinstall/upgrade, and a
+        // stray log inside it made "install.cmd" fail after first launch.
+        // The per-user data directory copy is always kept.
+        var protectedRuntimeLogRoots = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
+        };
+        var allowedRuntimeLogs = RuntimeLogCandidatePolicy.ExcludeProtectedRoots(
+            runtimeLogCandidates,
+            protectedRuntimeLogRoots);
+
         logger = new FileAppLogger(
             (new[] { Path.Combine(dataDirectory, "app.log") })
-                .Concat(runtimeLogCandidates)
+                .Concat(allowedRuntimeLogs)
                 .ToArray());
         logger.Info("MainWindow initializing.");
 

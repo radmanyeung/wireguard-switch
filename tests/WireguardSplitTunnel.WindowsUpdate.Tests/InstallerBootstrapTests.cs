@@ -445,6 +445,120 @@ public sealed class InstallerBootstrapTests : IDisposable
     }
 
     [Fact]
+    public void AuthenticatedBundleAclPlan_ToleratesRuntimeLogInsideTheApplicationFolder()
+    {
+        // The app appends runtime.log next to its executable when it runs
+        // elevated. A launched installation must still validate, otherwise
+        // every reinstall/upgrade through install.cmd fails with
+        // "undeclared payload: WireguardSplitTunnel/runtime.log".
+        _fixture.Package().ExitCode.Should().Be(0);
+        var nestedRuntimeLog = Path.Combine(
+            _fixture.PackageRoot,
+            "WireguardSplitTunnel",
+            "runtime.log");
+        File.WriteAllText(nestedRuntimeLog, "preserve nested runtime log");
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($PackageRoot)
+                $plan = Get-WgstAuthenticatedBundledReleaseAclPlan `
+                    -PackageRoot $PackageRoot
+                [ordered]@{
+                    bundled = [bool](Test-WgstBundledRelease `
+                        -PackageRoot $PackageRoot)
+                    files = @($plan.Files |
+                        ForEach-Object { $_.RelativePath })
+                } | ConvertTo-Json -Depth 4 -Compress
+            } '{{Escape(_fixture.PackageRoot)}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        using var plan = JsonDocument.Parse(result.StandardOutput.Trim());
+        plan.RootElement.GetProperty("bundled").GetBoolean().Should().BeTrue();
+        plan.RootElement.GetProperty("files")
+            .EnumerateArray()
+            .Select(element => element.GetString()!)
+            .Should().NotContain("WireguardSplitTunnel/runtime.log");
+        File.ReadAllText(nestedRuntimeLog)
+            .Should().Be("preserve nested runtime log");
+    }
+
+    [Fact]
+    public void AuthenticatedBundleValidation_StillRejectsOtherUndeclaredFilesInTheApplicationFolder()
+    {
+        _fixture.Package().ExitCode.Should().Be(0);
+        File.WriteAllText(
+            Path.Combine(
+                _fixture.PackageRoot,
+                "WireguardSplitTunnel",
+                "extra.dll"),
+            "must be rejected");
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($PackageRoot)
+                [void](Get-WgstAuthenticatedBundledReleaseAclPlan `
+                    -PackageRoot $PackageRoot)
+            } '{{Escape(_fixture.PackageRoot)}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().NotBe(0);
+        result.CombinedOutput.Should().Contain(
+            "undeclared payload: WireguardSplitTunnel/extra.dll");
+    }
+
+    [Fact]
+    public void ElevatedBootstrap_ShowsFailuresAndKeepsTheUacWindowOpen()
+    {
+        var install = File.ReadAllText(
+            Path.Combine(
+                _fixture.ActualRepositoryRoot,
+                "scripts",
+                "install.ps1"));
+
+        install.Should().Contain("$wgstElevatedChild = __ELEVATED_CHILD__");
+        install.Should().Contain("'[INSTALL] Elevated install FAILED: '");
+        install.Should().Contain(
+            "'[INSTALL] Press Enter to close this window.'");
+        install.Should().Contain("try { [void](Read-Host) } catch { }");
+        install.Should().Contain(
+            "$childBootstrapSource = $bootstrapSource.Replace(");
+        install.Should().Contain(
+            "[Text.Encoding]::Unicode.GetBytes($childBootstrapSource)");
+        install.Should().Contain(
+            "& ([ScriptBlock]::Create($inlineBootstrapSource))");
+        install.Should().Contain("throw $wgstFailure");
+    }
+
+    [Fact]
+    public void WireGuardAutoInstall_AcceptsTheSuccessRebootRequiredExitCode()
+    {
+        var install = File.ReadAllText(
+            Path.Combine(
+                _fixture.ActualRepositoryRoot,
+                "scripts",
+                "install.ps1"));
+
+        install.Should().Contain("$process.ExitCode -notin @(0, 3010)");
+        install.Should().Contain(
+            "'WireGuard installed; Windows requested a reboot (deferred).'");
+    }
+
+    [Fact]
     public void ProtectedInstallRoot_UsesProgramFilesAndRejectsMutationForANonAdminToken()
     {
         var modulePath = Path.Combine(

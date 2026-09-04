@@ -1420,7 +1420,11 @@ function Test-WgstReleasePackageNoSdk {
         }
         if ($AllowRuntimeExtras -and (
             $relative.StartsWith('logs/', [StringComparison]::OrdinalIgnoreCase) -or
-            $relative -in @('runtime.log', 'install.status.txt'))) {
+            $relative -in @('runtime.log', 'install.status.txt') -or
+            (Split-Path -Leaf $relative) -ieq 'runtime.log')) {
+            # The application appends runtime.log next to its executable
+            # (WireguardSplitTunnel/runtime.log) when it runs elevated, so a
+            # launched installation must still validate for reinstall/upgrade.
             continue
         }
         if ($AllowInstalledExtras -and
@@ -2269,7 +2273,13 @@ function Get-WgstAuthenticatedBundledReleaseAclPlan {
         [IO.Path]::DirectorySeparatorChar,
         [IO.Path]::AltDirectorySeparatorChar)
     if (-not (Test-WgstSafeInstalledReleaseRootAuthority $root)) {
-        throw 'Installed Release root has an unsafe authority.'
+        throw (
+            'Installed Release root has an unsafe authority. ' +
+            'Extract the Release into a plain folder on a fixed local ' +
+            'NTFS drive (for example C:\Users\<you>\Downloads\' +
+            'wireguard-split-tunnel-win-x64). Folders synced by OneDrive ' +
+            '(including a OneDrive-backed Desktop or Documents), drive ' +
+            'roots, removable drives, and network shares are rejected.')
     }
     Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
         -PackageRoot $root

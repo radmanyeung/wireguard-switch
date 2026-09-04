@@ -202,10 +202,15 @@ function Install-WireGuardForWindows {
         Remove-Item -LiteralPath $staging -Recurse -Force `
             -ErrorAction SilentlyContinue
     }
-    if ($process.ExitCode -ne 0) {
+    # 0 = success, 3010 = ERROR_SUCCESS_REBOOT_REQUIRED (install completed;
+    # /norestart deferred the reboot). Both leave wireguard.exe installed.
+    if ($process.ExitCode -notin @(0, 3010)) {
         throw (
             'WireGuard installer failed with exit code ' +
             "$($process.ExitCode).")
+    }
+    if ($process.ExitCode -eq 3010) {
+        Write-Step 'WireGuard installed; Windows requested a reboot (deferred).'
     }
 }
 
@@ -401,6 +406,8 @@ function Invoke-WgstBoundBundledReleaseBootstrap {
 $bootstrapTemplate = @'
 $ErrorActionPreference = 'Stop'
 $PSModuleAutoLoadingPreference = 'None'
+$wgstElevatedChild = __ELEVATED_CHILD__
+try {
 $trustedWindows = [Environment]::GetFolderPath(
     [Environment+SpecialFolder]::Windows)
 if ([string]::IsNullOrWhiteSpace($trustedWindows)) {
@@ -542,15 +549,42 @@ finally {
         } $installedRoot
     }
 }
+}
+catch {
+    # When this runs as the UAC-elevated child, its console window would
+    # close the instant the error is raised and the caller only sees
+    # "exit code 1". Show the failure and keep the window open instead.
+    $wgstFailure = $_
+    Write-Host ''
+    Write-Host (
+        '[INSTALL] Elevated install FAILED: ' +
+        $wgstFailure.Exception.Message) -ForegroundColor Red
+    if (-not [string]::IsNullOrWhiteSpace($wgstFailure.ScriptStackTrace)) {
+        Write-Host $wgstFailure.ScriptStackTrace
+    }
+    Write-Host '[INSTALL] Fix the cause above, then run install.cmd again.'
+    if ($wgstElevatedChild) {
+        Write-Host '[INSTALL] Press Enter to close this window.'
+        try { [void](Read-Host) } catch { }
+        exit 1
+    }
+    throw $wgstFailure
+}
 '@
     $bootstrapSource = $bootstrapTemplate.Replace(
         '__PAYLOAD__',
         $payloadBase64)
+    $inlineBootstrapSource = $bootstrapSource.Replace(
+        '__ELEVATED_CHILD__',
+        '$false')
+    $childBootstrapSource = $bootstrapSource.Replace(
+        '__ELEVATED_CHILD__',
+        '$true')
     $encodedCommand = [Convert]::ToBase64String(
-        [Text.Encoding]::Unicode.GetBytes($bootstrapSource))
+        [Text.Encoding]::Unicode.GetBytes($childBootstrapSource))
 
     if (Test-IsAdministrator) {
-        & ([ScriptBlock]::Create($bootstrapSource))
+        & ([ScriptBlock]::Create($inlineBootstrapSource))
         return
     }
 
@@ -565,7 +599,11 @@ finally {
         -Wait `
         -PassThru
     if ($process.ExitCode -ne 0) {
-        throw "Protected installer failed with exit code $($process.ExitCode)."
+        throw (
+            "Protected installer failed with exit code $($process.ExitCode). " +
+            'The elevated installer window shows the detailed error and ' +
+            'stays open until you press Enter. Fix the cause it reports, ' +
+            'then run install.cmd again.')
     }
 }
 

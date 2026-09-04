@@ -14,11 +14,11 @@ routes, and network monitoring.
 
 Installer bootstrap does:
 - auto-elevate to Administrator
-- check/install missing `WireGuard`
+- check/install missing `WireGuard` (official signed MSI, silent install)
 - if no local EXE and no SDK: auto-download latest prebuilt from GitHub Releases
-- check/install missing `.NET 8 SDK` only when prebuilt is unavailable and publish is needed
-- prefer `winget`; fallback to official direct installer download
-- publish app to `.\WireguardSplitTunnel\` (unless skipped)
+- require an already installed `.NET 8 SDK` only when a developer-source
+  checkout must be published locally (a Release ZIP never needs it)
+- copy the validated Release to `C:\Program Files\WireguardSplitTunnel\`
 - create desktop shortcuts (unless skipped)
 - launch post-install self test (unless skipped)
 
@@ -26,17 +26,31 @@ Installer bootstrap does:
 
 Lessons from real fresh-machine installs:
 
-1. Install **WireGuard for Windows** first (https://www.wireguard.com/install/).
-   The installer refuses to continue without it.
+1. **WireGuard for Windows** is installed automatically since v0.2.8: the
+   installer downloads the official MSI, checks its Authenticode signature
+   (WireGuard LLC), and installs it silently. This needs internet access.
+   You can also install it yourself first (https://www.wireguard.com/install/).
 2. Download `wireguard-split-tunnel-win-x64.zip` from GitHub **Releases**
    (not the source-code ZIP from the `Code` button).
-3. Extract the ZIP into a **brand-new empty folder**. Never extract over an
-   existing folder and never add files into it afterwards: the installer is
-   fail-closed and rejects any file that is not declared in the release
-   manifest (`Release package contains an undeclared payload: ...`).
-4. Double-click `install.cmd` and approve the UAC prompt. Since v0.2.3 the
-   window stays open on failure so you can read the error; details are also
-   in `%LOCALAPPDATA%\WireguardSplitTunnel\logs\`.
+3. Extract the ZIP into a **brand-new empty folder on a fixed local NTFS
+   drive**, for example `C:\Users\<you>\Downloads\wireguard-split-tunnel-win-x64`.
+   The installer is fail-closed and rejects:
+   - any file that is not declared in the release manifest
+     (`Release package contains an undeclared payload: ...`), so never
+     extract over an existing folder or add files afterwards;
+   - folders synced by **OneDrive** (a OneDrive-backed Desktop or Documents
+     folder counts), drive roots such as `D:\`, USB/removable drives, and
+     network shares (`Installed Release root has an unsafe authority`).
+4. Double-click `install.cmd` and approve the UAC prompt. The `install.cmd`
+   window stays open on failure so you can read the error. Since v0.2.9 the
+   elevated (UAC) window also stays open and shows the detailed reason when
+   the protected install step fails; earlier versions closed it immediately
+   and only reported `Protected installer failed with exit code 1`. The
+   non-elevated phase is also logged to
+   `%LOCALAPPDATA%\WireguardSplitTunnel\logs\`.
+   Reinstalling or upgrading over an existing installation with `install.cmd`
+   works from v0.2.9 on; v0.2.8 and earlier failed once the app had been
+   launched (`undeclared payload: WireguardSplitTunnel/runtime.log`).
 5. After a successful install, start the app from the **desktop shortcut**
    (or `C:\Program Files\WireguardSplitTunnel\start.cmd`). The `start.cmd`
    in the extracted folder is not an entry point and always refuses.
