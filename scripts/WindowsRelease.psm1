@@ -2761,6 +2761,157 @@ function Test-WgstInstalledReleaseAclPlanExact {
     return $true
 }
 
+function Get-WgstProtectedInstallReplacementDecision {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstalledVersion,
+        [Parameter(Mandatory = $true)][string]$PackageVersion
+    )
+
+    $comparison = Compare-WgstVersion $PackageVersion $InstalledVersion
+    if ($comparison -gt 0) {
+        return 'Upgrade'
+    }
+    if ($comparison -lt 0) {
+        return 'Downgrade'
+    }
+    return 'Reinstall'
+}
+
+function Get-WgstStaleManagedRelativePaths {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$InstalledManagedPaths,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$PackageManagedPaths
+    )
+
+    $keep = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($path in $PackageManagedPaths) {
+        [void]$keep.Add($path)
+    }
+    # Emit the items plainly; callers wrap with @(). A ",@()" return would
+    # hand an empty inner array to the caller as one element.
+    return @($InstalledManagedPaths |
+        Where-Object { -not $keep.Contains($_) } |
+        Sort-Object -Unique)
+}
+
+function Get-WgstProtectedInstallProcessesInUse {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar) +
+        [IO.Path]::DirectorySeparatorChar
+    $inUse = @()
+    foreach ($process in @(Get-Process -ErrorAction SilentlyContinue)) {
+        $path = $null
+        try {
+            $path = [string]$process.MainModule.FileName
+        }
+        catch {
+            $path = $null
+        }
+        if (-not [string]::IsNullOrWhiteSpace($path) -and
+            $path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            $inUse += [pscustomobject]@{
+                Id = $process.Id
+                Name = $process.ProcessName
+                Path = $path
+            }
+        }
+    }
+    return $inUse
+}
+
+function Update-WgstProtectedInstalledRelease {
+    # Replaces an exact, validated protected installation with the
+    # authenticated bundled package in place (reinstall or upgrade), using
+    # the same certified managed-file replacement as blocked-update repair,
+    # then removes managed files the new manifest no longer declares.
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [Parameter(Mandatory = $true)]$ExistingPlan,
+        [Parameter(Mandatory = $true)]$SourcePlan
+    )
+
+    $installedVersion = ([string]$ExistingPlan.Tag).Substring(1)
+    $packageVersion = ([string]$SourcePlan.Tag).Substring(1)
+    $decision = Get-WgstProtectedInstallReplacementDecision `
+        -InstalledVersion $installedVersion `
+        -PackageVersion $packageVersion
+    if ($decision -ceq 'Downgrade') {
+        throw (
+            "The installed version $installedVersion at $InstallRoot is " +
+            "newer than this package ($packageVersion). install.cmd does " +
+            'not downgrade. Download the latest Release, or delete that ' +
+            'folder first (Administrator rights) if you really want the ' +
+            'older version.')
+    }
+
+    $inUse = @(Get-WgstProtectedInstallProcessesInUse -InstallRoot $InstallRoot)
+    if ($inUse.Count -gt 0) {
+        $names = @($inUse | ForEach-Object { "$($_.Name) (PID $($_.Id))" }) -join ', '
+        throw (
+            "Wireguard Split Tunnel is still running: $names. Close it " +
+            '(also from the tray icon), then run install.cmd again.')
+    }
+
+    Write-Host (
+        "[INSTALL] $decision" + ': replacing installed ' +
+        "$installedVersion with $packageVersion in place...")
+    [void](Repair-WgstProtectedInstalledRelease `
+        -InstallRoot $InstallRoot `
+        -AuthenticatedPackageRoot $SourcePlan.Root)
+
+    $staleFiles = @(Get-WgstStaleManagedRelativePaths `
+        -InstalledManagedPaths @($ExistingPlan.Files |
+            ForEach-Object { [string]$_.RelativePath }) `
+        -PackageManagedPaths @($SourcePlan.Files |
+            ForEach-Object { [string]$_.RelativePath }))
+    foreach ($relative in $staleFiles) {
+        $path = Join-Path $InstallRoot (
+            $relative.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+        $item = Get-Item -LiteralPath $path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Stale managed file is a reparse point: $relative"
+        }
+        Remove-Item -LiteralPath $path -Force
+    }
+    $staleDirectories = @(Get-WgstStaleManagedRelativePaths `
+        -InstalledManagedPaths @($ExistingPlan.Directories |
+            Where-Object { $_.Scope -ceq 'DescendantDirectory' } |
+            ForEach-Object { [string]$_.RelativePath }) `
+        -PackageManagedPaths @($SourcePlan.Directories |
+            Where-Object { $_.Scope -ceq 'DescendantDirectory' } |
+            ForEach-Object { [string]$_.RelativePath }))
+    foreach ($relative in @($staleDirectories |
+            Sort-Object { $_.Length } -Descending)) {
+        $path = Join-Path $InstallRoot $relative
+        if ((Test-Path -LiteralPath $path -PathType Container) -and
+            @(Get-ChildItem -LiteralPath $path -Force).Count -eq 0) {
+            Remove-Item -LiteralPath $path -Force
+        }
+    }
+
+    $updated = Get-WgstAuthenticatedBundledReleaseAclPlan `
+        -PackageRoot $InstallRoot
+    if (-not (Test-WgstPackageTreesEqual `
+            -Left $SourcePlan.Root `
+            -Right $InstallRoot) -or
+        -not (Test-WgstInstalledReleaseAclPlanExact -Plan $updated) -or
+        -not (Test-WgstBundledRelease -PackageRoot $InstallRoot)) {
+        throw 'Protected installed Release replacement failed final validation.'
+    }
+    return $InstallRoot
+}
+
 function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
     [CmdletBinding()]
     param(
@@ -2794,18 +2945,32 @@ function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
 
     if (-not $RepairBootstrap -and
         (Test-Path -LiteralPath $installRoot)) {
-        $existing = Get-WgstAuthenticatedBundledReleaseAclPlan `
-            -PackageRoot $installRoot
-        if (-not (Test-WgstPackageTreesEqual `
-                -Left $sourcePlan.Root `
-                -Right $installRoot) -or
-            -not (Test-WgstInstalledReleaseAclPlanExact `
-                -Plan $existing)) {
-            throw (
-                'Protected install root already exists with different or ' +
-                'unsafe managed content.')
+        try {
+            $existing = Get-WgstAuthenticatedBundledReleaseAclPlan `
+                -PackageRoot $installRoot
         }
-        return $installRoot
+        catch {
+            throw (
+                "The existing installation at $installRoot could not be " +
+                "validated: $($_.Exception.Message) Delete that folder " +
+                '(Administrator rights required), then run install.cmd again.')
+        }
+        if (-not (Test-WgstInstalledReleaseAclPlanExact -Plan $existing)) {
+            throw (
+                "The existing installation at $installRoot does not carry " +
+                'the exact protected security policy and will not be ' +
+                'replaced in place. Delete that folder (Administrator ' +
+                'rights required), then run install.cmd again.')
+        }
+        if (Test-WgstPackageTreesEqual `
+                -Left $sourcePlan.Root `
+                -Right $installRoot) {
+            return $installRoot
+        }
+        return Update-WgstProtectedInstalledRelease `
+            -InstallRoot $installRoot `
+            -ExistingPlan $existing `
+            -SourcePlan $sourcePlan
     }
 
     $staging = Join-Path $installParent (

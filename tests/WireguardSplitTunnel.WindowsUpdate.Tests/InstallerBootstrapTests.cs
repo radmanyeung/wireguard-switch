@@ -558,6 +558,138 @@ public sealed class InstallerBootstrapTests : IDisposable
             "'WireGuard installed; Windows requested a reboot (deferred).'");
     }
 
+    [Theory]
+    [InlineData("0.2.8", "0.2.9", "Upgrade")]
+    [InlineData("0.2.9", "0.2.9", "Reinstall")]
+    [InlineData("0.2.9", "0.2.8", "Downgrade")]
+    [InlineData("0.2.9", "0.10.0", "Upgrade")]
+    public void ProtectedInstallReplacement_DecidesUpgradeReinstallOrDowngrade(
+        string installed,
+        string package,
+        string expected)
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($Installed, $Package)
+                Get-WgstProtectedInstallReplacementDecision `
+                    -InstalledVersion $Installed `
+                    -PackageVersion $Package
+            } '{{installed}}' '{{package}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        result.StandardOutput.Trim().Should().Be(expected);
+    }
+
+    [Fact]
+    public void ProtectedInstallReplacement_ComputesStaleManagedPathsCaseInsensitively()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                $stale = Get-WgstStaleManagedRelativePaths `
+                    -InstalledManagedPaths @(
+                        'scripts/old.ps1',
+                        'README.md',
+                        'WireguardSplitTunnel/Legacy.dll') `
+                    -PackageManagedPaths @(
+                        'readme.md',
+                        'scripts/start.ps1')
+                ($stale -join ';')
+                $none = Get-WgstStaleManagedRelativePaths `
+                    -InstalledManagedPaths @() `
+                    -PackageManagedPaths @('a')
+                "count=$(@($none).Count)"
+            }
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        var lines = result.StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .ToArray();
+        lines[0].Should().Be("scripts/old.ps1;WireguardSplitTunnel/Legacy.dll");
+        lines[1].Should().Be("count=0");
+    }
+
+    [Fact]
+    public void ProtectedAnchor_ReplacesAnExactExistingInstallInPlaceButNeverDowngrades()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                $anchor = ${function:Install-WgstAuthenticatedBundledReleaseToProtectedAnchor}.ToString()
+                $update = ${function:Update-WgstProtectedInstalledRelease}.ToString()
+                if ($anchor -notmatch 'Update-WgstProtectedInstalledRelease' -or
+                    $anchor -notmatch 'Test-WgstInstalledReleaseAclPlanExact' -or
+                    $update -notmatch 'Repair-WgstProtectedInstalledRelease' -or
+                    $update -notmatch 'Get-WgstProtectedInstallProcessesInUse' -or
+                    $update -notmatch "'Downgrade'" -or
+                    $update -notmatch 'Test-WgstBundledRelease') {
+                    throw 'In-place replacement contract is missing.'
+                }
+                'in-place'
+            }
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        result.StandardOutput.Trim().Should().Be("in-place");
+    }
+
+    [Fact]
+    public void ProtectedInstallProcessesInUse_ReportsOnlyProcessesUnderTheInstallRoot()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($Root)
+                $none = @(Get-WgstProtectedInstallProcessesInUse -InstallRoot $Root)
+                "none=$($none.Count)"
+                $self = [Diagnostics.Process]::GetCurrentProcess()
+                $selfRoot = Split-Path -Parent $self.MainModule.FileName
+                $hits = @(Get-WgstProtectedInstallProcessesInUse -InstallRoot $selfRoot)
+                "self=$(@($hits | Where-Object { $_.Id -eq $self.Id }).Count)"
+            } '{{Escape(_fixture.Root)}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        var lines = result.StandardOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .ToArray();
+        lines[0].Should().Be("none=0");
+        lines[1].Should().Be("self=1");
+    }
+
     [Fact]
     public void ProtectedInstallRoot_UsesProgramFilesAndRejectsMutationForANonAdminToken()
     {

@@ -49,8 +49,13 @@ Lessons from real fresh-machine installs:
    non-elevated phase is also logged to
    `%LOCALAPPDATA%\WireguardSplitTunnel\logs\`.
    Reinstalling or upgrading over an existing installation with `install.cmd`
-   works from v0.2.9 on; v0.2.8 and earlier failed once the app had been
-   launched (`undeclared payload: WireguardSplitTunnel/runtime.log`).
+   works from v0.2.9 on: the installed copy is replaced in place with the
+   same certified file replacement the updater uses. **Close the app first**
+   (including the tray icon); the installer refuses while it is running, and
+   it never downgrades. v0.2.8 and earlier refused any existing installation
+   (`Protected install root already exists ...`) and, once the app had been
+   launched, also failed with
+   `undeclared payload: WireguardSplitTunnel/runtime.log`.
 5. After a successful install, start the app from the **desktop shortcut**
    (or `C:\Program Files\WireguardSplitTunnel\start.cmd`). The `start.cmd`
    in the extracted folder is not an entry point and always refuses.
