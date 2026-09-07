@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Windows;
 using WireguardSplitTunnel.Core.Models;
@@ -17,6 +18,9 @@ public partial class App : Application
 {
     private readonly ApplicationCloseIntentTracker
         closeIntentTracker = new();
+    private EventWaitHandle? installerMaintenanceEvent;
+    private RegisteredWaitHandle? installerMaintenanceWait;
+    private EventWaitHandle? installCommitEvent;
 
     public App()
     {
@@ -35,6 +39,14 @@ public partial class App : Application
             string.Equals(arg, "--post-install-self-test", StringComparison.OrdinalIgnoreCase));
         var updateHealthContext =
             TryReadUpdateHealthContext(e.Args);
+        InstallStartupHandshake.TryParse(
+            e.Args,
+            out var installStartupHandshake);
+        if (installStartupHandshake is not null)
+        {
+            installCommitEvent = TryCreateProtectedInstallerEvent(
+                installStartupHandshake.CommitEventName);
+        }
 
         WriteBootstrapLog(
             $"Startup. requireAdmin={requireAdmin}, "
@@ -102,9 +114,14 @@ public partial class App : Application
             updateCloseParticipant: updates,
             windowsUpdate: updates,
             updateStartupHealthContext:
-                updateHealthContext);
+                updateHealthContext,
+            installStartupHandshake:
+                installStartupHandshake,
+            installCommitEvent:
+                installCommitEvent);
         MainWindow = window;
         window.Show();
+        StartInstallerMaintenanceChannel(window);
     }
 
     protected override void OnSessionEnding(
@@ -112,6 +129,98 @@ public partial class App : Application
     {
         closeIntentTracker.RecordSessionEnding();
         base.OnSessionEnding(e);
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        installerMaintenanceWait?.Unregister(null);
+        installerMaintenanceEvent?.Dispose();
+        installCommitEvent?.Dispose();
+        base.OnExit(e);
+    }
+
+    private static EventWaitHandle? TryCreateProtectedInstallerEvent(
+        string eventName)
+    {
+        try
+        {
+            var security = new EventWaitHandleSecurity();
+            security.SetOwner(new SecurityIdentifier(
+                WellKnownSidType.BuiltinAdministratorsSid,
+                null));
+            security.SetAccessRuleProtection(
+                isProtected: true,
+                preserveInheritance: false);
+            foreach (var sidType in new[]
+            {
+                WellKnownSidType.LocalSystemSid,
+                WellKnownSidType.BuiltinAdministratorsSid
+            })
+            {
+                security.AddAccessRule(new EventWaitHandleAccessRule(
+                    new SecurityIdentifier(sidType, null),
+                    EventWaitHandleRights.FullControl,
+                    AccessControlType.Allow));
+            }
+            var handle = EventWaitHandleAcl.Create(
+                false,
+                EventResetMode.AutoReset,
+                eventName,
+                out var createdNew,
+                security);
+            if (createdNew)
+            {
+                return handle;
+            }
+            handle.Dispose();
+        }
+        catch
+        {
+        }
+        return null;
+    }
+
+    private void StartInstallerMaintenanceChannel(Window window)
+    {
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            var creationTime = process.StartTime
+                .ToUniversalTime()
+                .ToFileTimeUtc();
+            var eventName = InstallerMaintenanceChannel.CreateEventName(
+                process.Id,
+                creationTime);
+            installerMaintenanceEvent =
+                TryCreateProtectedInstallerEvent(eventName);
+            if (installerMaintenanceEvent is null)
+            {
+                return;
+            }
+
+            installerMaintenanceWait = ThreadPool.RegisterWaitForSingleObject(
+                installerMaintenanceEvent,
+                (_, timedOut) =>
+                {
+                    if (timedOut)
+                    {
+                        return;
+                    }
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        closeIntentTracker.ResolveInstallerMaintenance();
+                        window.Close();
+                    });
+                },
+                null,
+                Timeout.Infinite,
+                executeOnlyOnce: true);
+        }
+        catch (Exception exception)
+        {
+            WriteBootstrapLog(
+                $"Installer maintenance channel available=false: {exception.Message}");
+        }
     }
 
     private static UpdateStartupHealthContext?

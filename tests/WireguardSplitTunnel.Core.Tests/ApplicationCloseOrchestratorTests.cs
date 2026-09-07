@@ -41,6 +41,34 @@ public sealed class ApplicationCloseOrchestratorTests
     }
 
     [Fact]
+    public async Task RunOnceAsync_InstallerMaintenance_SavesWithoutRestoringOrAuthorizing()
+    {
+        var restored = 0;
+        var tracker = TrackerWith(ApplicationCloseIntent.InstallerMaintenance);
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            tracker,
+            _ =>
+            {
+                restored++;
+                return Task.CompletedTask;
+            });
+
+        var result = await orchestrator.RunOnceAsync();
+
+        participant.StopCount.Should().Be(1);
+        actions.RunCount.Should().Be(1);
+        actions.SaveCount.Should().Be(1);
+        restored.Should().Be(0);
+        participant.AuthorizationCount.Should().Be(0);
+        result.Outcome.Should().Be(ApplicationCloseOutcome.NoAuthorization);
+        result.Failures.Should().Be(ApplicationCloseFailureFlags.None);
+    }
+
+    [Fact]
     public async Task RunOnceAsync_WaitsForIncrementalReconcileCommitBeforeRestore()
     {
         using var softwareGate = new SemaphoreSlim(1, 1);
@@ -631,6 +659,9 @@ public sealed class ApplicationCloseOrchestratorTests
                 break;
             case ApplicationCloseIntent.ElevationHandoff:
                 tracker.RecordElevationHandoff();
+                break;
+            case ApplicationCloseIntent.InstallerMaintenance:
+                tracker.ResolveInstallerMaintenance();
                 break;
         }
 

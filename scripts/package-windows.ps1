@@ -198,6 +198,12 @@ function New-DeterministicZip {
 
 $repositoryFull = [IO.Path]::GetFullPath($RepositoryRoot)
 $outputFull = [IO.Path]::GetFullPath($OutputRoot)
+$bootstrapGenerator = Join-Path $repositoryFull 'scripts\update-install-cmd.ps1'
+$bootstrapSource = Join-Path $repositoryFull 'scripts\install-bootstrap.ps1'
+if ((Test-Path -LiteralPath $bootstrapGenerator -PathType Leaf) -and
+    (Test-Path -LiteralPath $bootstrapSource -PathType Leaf)) {
+    & $bootstrapGenerator -RepositoryRoot $repositoryFull -Check
+}
 if ($outputFull -eq $repositoryFull -or
     $repositoryFull.StartsWith(
         $outputFull + [IO.Path]::DirectorySeparatorChar,

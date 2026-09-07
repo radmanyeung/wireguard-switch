@@ -12,8 +12,22 @@ public sealed class ApplicationCloseIntentTests
             ApplicationCloseIntent.UnknownOrAbnormal,
             ApplicationCloseIntent.UserOrApplicationClose,
             ApplicationCloseIntent.SessionEnding,
-            ApplicationCloseIntent.ElevationHandoff);
-        Enum.GetValues<ApplicationCloseIntent>().Select(value => (int)value).Should().Equal(0, 1, 2, 3);
+            ApplicationCloseIntent.ElevationHandoff,
+            ApplicationCloseIntent.InstallerMaintenance);
+        Enum.GetValues<ApplicationCloseIntent>().Select(value => (int)value).Should().Equal(0, 1, 2, 3, 4);
+    }
+
+    [Fact]
+    public void InstallerMaintenance_IsTerminalExceptForSessionEnding()
+    {
+        var tracker = new ApplicationCloseIntentTracker();
+        tracker.ResolveInstallerMaintenance();
+        tracker.ResolveNormalClose();
+        tracker.RecordElevationHandoff();
+        tracker.Current.Should().Be(ApplicationCloseIntent.InstallerMaintenance);
+
+        tracker.RecordSessionEnding();
+        tracker.Current.Should().Be(ApplicationCloseIntent.SessionEnding);
     }
 
     [Fact]

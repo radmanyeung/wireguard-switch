@@ -31,6 +31,7 @@ $script:WgstContract = [pscustomobject]@{
     maximumExpandedBytes = 1GB
     maximumCompressionRatio = 200.0
 }
+$script:WgstLastInstallReplacement = $null
 
 if ($null -eq (
         'WireguardSplitTunnel.ReleaseScripts.NativeFileIdentity' -as
@@ -2761,6 +2762,53 @@ function Test-WgstInstalledReleaseAclPlanExact {
     return $true
 }
 
+function Assert-WgstSafeProtectedInstallRootForReplacement {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $expected = Get-WgstProtectedInstallRoot
+    $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    if ($root -ine $expected -or
+        -not (Test-Path -LiteralPath $root -PathType Container) -or
+        -not (Test-WgstProtectedInstallParentAuthority `
+            -InstallRoot $root)) {
+        throw 'Protected install root identity is unsafe.'
+    }
+    [void](Get-WgstNativeFileSnapshot -Path $root -Directory)
+    if (-not (Test-WgstExactInstalledReleaseAcl `
+            -Path $root `
+            -Scope RootDirectory)) {
+        throw 'Protected install root authority is unsafe.'
+    }
+    Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
+        -PackageRoot $root
+}
+
+function Get-WgstInstalledReleaseVersionForReplacement {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $manifestPath = Join-Path $InstallRoot $script:WgstContract.manifest
+    try {
+        $item = Get-Item -LiteralPath $manifestPath -Force -ErrorAction Stop
+        if ($item.PSIsContainer -or
+            ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $item.Length -lt 1 -or
+            $item.Length -gt $script:WgstContract.metadataBytes) {
+            return '0.0.0'
+        }
+        $bytes = [IO.File]::ReadAllBytes($manifestPath)
+        $text = [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
+        $manifest = $text | ConvertFrom-Json
+        $tag = "v$($manifest.version)"
+        if (-not (Test-WgstStableTag $tag)) {
+            return '0.0.0'
+        }
+        return ([string]$manifest.version)
+    }
+    catch {
+        return '0.0.0'
+    }
+}
+
 function Get-WgstProtectedInstallReplacementDecision {
     param(
         [Parameter(Mandatory = $true)][string]$InstalledVersion,
@@ -2821,17 +2869,585 @@ function Get-WgstProtectedInstallProcessesInUse {
                 Id = $process.Id
                 Name = $process.ProcessName
                 Path = $path
+                CreationTimeFileTimeUtc =
+                    $process.StartTime.ToUniversalTime().ToFileTimeUtc()
             }
         }
     }
     return $inUse
 }
 
+function Get-WgstInstallerMaintenanceEventName {
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [Parameter(Mandatory = $true)][long]$CreationTimeFileTimeUtc
+    )
+
+    if ($ProcessId -le 0 -or $CreationTimeFileTimeUtc -le 0) {
+        throw 'Installer maintenance process identity is invalid.'
+    }
+    return (
+        'Local\WireguardSplitTunnel.InstallerMaintenance.' +
+        "$ProcessId.$CreationTimeFileTimeUtc")
+}
+
+function Test-WgstProtectedInstallProcessIdentity {
+    param([Parameter(Mandatory = $true)]$ExpectedProcess)
+
+    try {
+        $process = Get-Process -Id ([int]$ExpectedProcess.Id) -ErrorAction Stop
+        $path = [string]$process.MainModule.FileName
+        $created = $process.StartTime.ToUniversalTime().ToFileTimeUtc()
+        if ($path -ine [string]$ExpectedProcess.Path -or
+            $created -ne [long]$ExpectedProcess.CreationTimeFileTimeUtc) {
+            return $null
+        }
+        return $process
+    }
+    catch {
+        return $null
+    }
+}
+
+function Stop-WgstProtectedInstallProcessesForMaintenance {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $targets = @(Get-WgstProtectedInstallProcessesInUse `
+        -InstallRoot $InstallRoot)
+    foreach ($target in $targets) {
+        $process = Test-WgstProtectedInstallProcessIdentity `
+            -ExpectedProcess $target
+        if ($null -eq $process) {
+            continue
+        }
+
+        $maintenanceEvent = $null
+        try {
+            $eventName = Get-WgstInstallerMaintenanceEventName `
+                -ProcessId ([int]$target.Id) `
+                -CreationTimeFileTimeUtc (
+                    [long]$target.CreationTimeFileTimeUtc)
+            $maintenanceEvent =
+                [Threading.EventWaitHandle]::OpenExisting($eventName)
+            [void]$maintenanceEvent.Set()
+        }
+        catch [Threading.WaitHandleCannotBeOpenedException] {
+            # Older releases do not expose the authenticated maintenance event.
+        }
+        finally {
+            if ($null -ne $maintenanceEvent) {
+                $maintenanceEvent.Dispose()
+            }
+        }
+
+        try {
+            if ($process.WaitForExit(25000)) {
+                continue
+            }
+        }
+        catch {
+            if ($null -eq (Test-WgstProtectedInstallProcessIdentity `
+                    -ExpectedProcess $target)) {
+                continue
+            }
+        }
+
+        # The WireGuard tunnel service is left running. Only the process whose
+        # path, PID, and creation time still match the captured identity is
+        # terminated for compatibility with older application releases.
+        $process = Test-WgstProtectedInstallProcessIdentity `
+            -ExpectedProcess $target
+        if ($null -ne $process) {
+            Stop-Process -Id ([int]$target.Id) -Force -ErrorAction Stop
+            if (-not $process.WaitForExit(10000)) {
+                throw "Installed application PID $($target.Id) did not exit."
+            }
+        }
+    }
+
+    $remaining = @(Get-WgstProtectedInstallProcessesInUse `
+        -InstallRoot $InstallRoot)
+    if ($remaining.Count -gt 0) {
+        $names = @($remaining | ForEach-Object {
+            "$($_.Name) (PID $($_.Id))"
+        }) -join ', '
+        throw "Installed application processes are still running: $names"
+    }
+}
+
+function Invoke-WgstDirectorySwapTransaction {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [Parameter(Mandatory = $true)][string]$StagingRoot,
+        [Parameter(Mandatory = $true)][string]$BackupRoot,
+        [Parameter(Mandatory = $true)][scriptblock]$Validator
+    )
+
+    $install = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    $staging = [IO.Path]::GetFullPath($StagingRoot).TrimEnd('\')
+    $backup = [IO.Path]::GetFullPath($BackupRoot).TrimEnd('\')
+    $parent = Split-Path -Parent $install
+    if ((Split-Path -Parent $staging) -ine $parent -or
+        (Split-Path -Parent $backup) -ine $parent -or
+        $install -ieq $staging -or $install -ieq $backup -or
+        $staging -ieq $backup -or
+        -not (Test-Path -LiteralPath $install -PathType Container) -or
+        -not (Test-Path -LiteralPath $staging -PathType Container) -or
+        (Test-Path -LiteralPath $backup)) {
+        throw 'Install directory swap paths are invalid.'
+    }
+
+    Move-Item -LiteralPath $install -Destination $backup
+    try {
+        Move-Item -LiteralPath $staging -Destination $install
+        if (-not (& $Validator $install)) {
+            throw 'Published installed Release failed validation.'
+        }
+        return [pscustomobject]@{
+            InstallRoot = $install
+            BackupRoot = $backup
+        }
+    }
+    catch {
+        $failure = $_
+        if (Test-Path -LiteralPath $install -PathType Container) {
+            $failed = "$install.failed-$([Guid]::NewGuid().ToString('N'))"
+            Move-Item -LiteralPath $install -Destination $failed
+        }
+        if (Test-Path -LiteralPath $backup -PathType Container) {
+            Move-Item -LiteralPath $backup -Destination $install
+        }
+        throw $failure
+    }
+}
+
+function Replace-WgstManagedFileAtomically {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReplacementPath,
+        [Parameter(Mandatory = $true)][string]$TargetPath
+    )
+
+    $backup = "$TargetPath.replace-backup-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        [IO.File]::Replace($ReplacementPath, $TargetPath, $backup)
+        if (Test-Path -LiteralPath $backup -PathType Leaf) {
+            Remove-Item -LiteralPath $backup -Force
+        }
+    }
+    catch {
+        if ((Test-Path -LiteralPath $backup -PathType Leaf) -and
+            -not (Test-Path -LiteralPath $TargetPath -PathType Leaf)) {
+            Move-Item -LiteralPath $backup -Destination $TargetPath
+        }
+        throw
+    }
+}
+
+function Get-WgstInstallTransactionJournalPath {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $expected = Get-WgstProtectedInstallRoot
+    $install = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    if ($install -ine $expected -or
+        -not (Test-WgstProtectedInstallParentAuthority `
+            -InstallRoot $install)) {
+        throw 'Install transaction journal boundary is invalid.'
+    }
+    return Join-Path (Split-Path -Parent $install) `
+        'WireguardSplitTunnel.install-transaction.json'
+}
+
+function Write-WgstInstallTransactionJournal {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [Parameter(Mandatory = $true)][string]$TransactionId,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Staged', 'Switching', 'Published')]
+        [string]$Phase,
+        [Parameter(Mandatory = $true)][string]$StagingRoot,
+        [AllowNull()][string]$BackupRoot
+    )
+
+    if ($TransactionId -cnotmatch '^[0-9a-f]{32}$') {
+        throw 'Install transaction identifier is invalid.'
+    }
+    $journal = Get-WgstInstallTransactionJournalPath `
+        -InstallRoot $InstallRoot
+    $temporary = "$journal.$TransactionId.tmp"
+    $record = [ordered]@{
+        schemaVersion = 1
+        transactionId = $TransactionId
+        phase = $Phase
+        installRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+        stagingRoot = [IO.Path]::GetFullPath($StagingRoot).TrimEnd('\')
+        backupRoot = if ([string]::IsNullOrWhiteSpace($BackupRoot)) {
+            $null
+        }
+        else {
+            [IO.Path]::GetFullPath($BackupRoot).TrimEnd('\')
+        }
+    }
+    try {
+        [IO.File]::WriteAllText(
+            $temporary,
+            ($record | ConvertTo-Json -Compress),
+            [Text.UTF8Encoding]::new($false))
+        $security = New-WgstExactProtectedSecurity -Directory $false
+        $privilege =
+            [WireguardSplitTunnel.ReleaseScripts.NativeFileIdentity]::
+                EnableRestorePrivilege()
+        try {
+            Set-WgstFileSystemSecurity `
+                -Path $temporary `
+                -Directory $false `
+                -Security $security
+        }
+        finally {
+            $privilege.Dispose()
+        }
+        if (-not (Test-WgstProtectedRepairAcl $temporary)) {
+            throw 'Install transaction journal ACL validation failed.'
+        }
+        if (Test-Path -LiteralPath $journal -PathType Leaf) {
+            Replace-WgstManagedFileAtomically `
+                -ReplacementPath $temporary `
+                -TargetPath $journal
+        }
+        else {
+            Move-Item -LiteralPath $temporary -Destination $journal
+        }
+        if (-not (Test-WgstProtectedRepairAcl $journal)) {
+            throw 'Published install transaction journal is unsafe.'
+        }
+        return $journal
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+}
+
+function Remove-WgstInstallTransactionJournal {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $journal = Get-WgstInstallTransactionJournalPath `
+        -InstallRoot $InstallRoot
+    if (Test-Path -LiteralPath $journal -PathType Leaf) {
+        $item = Get-Item -LiteralPath $journal -Force
+        if (($item.Attributes -band
+                [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Install transaction journal is a reparse point.'
+        }
+        Remove-Item -LiteralPath $journal -Force
+    }
+}
+
+function Recover-WgstInterruptedInstallTransaction {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+
+    $journal = Get-WgstInstallTransactionJournalPath `
+        -InstallRoot $InstallRoot
+    if (-not (Test-Path -LiteralPath $journal -PathType Leaf)) {
+        return
+    }
+    $item = Get-Item -LiteralPath $journal -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $item.Length -lt 1 -or $item.Length -gt 64KB -or
+        -not (Test-WgstProtectedRepairAcl $journal)) {
+        throw 'Interrupted install transaction journal is unsafe.'
+    }
+    $record = Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json
+    if ([int]$record.schemaVersion -ne 1 -or
+        [string]$record.transactionId -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$record.phase -notin @('Staged', 'Switching', 'Published')) {
+        throw 'Interrupted install transaction journal is invalid.'
+    }
+    $expected = Get-WgstProtectedInstallRoot
+    $install = [IO.Path]::GetFullPath([string]$record.installRoot).TrimEnd('\')
+    $parent = Split-Path -Parent $expected
+    $staging = [IO.Path]::GetFullPath([string]$record.stagingRoot).TrimEnd('\')
+    $backup = if ($null -eq $record.backupRoot -or
+        [string]::IsNullOrWhiteSpace([string]$record.backupRoot)) {
+        $null
+    }
+    else {
+        [IO.Path]::GetFullPath([string]$record.backupRoot).TrimEnd('\')
+    }
+    if ($install -ine $expected -or
+        (Split-Path -Parent $staging) -ine $parent -or
+        -not (Split-Path -Leaf $staging).StartsWith(
+            'WireguardSplitTunnel.install-',
+            [StringComparison]::Ordinal) -or
+        ($null -ne $backup -and (
+            (Split-Path -Parent $backup) -ine $parent -or
+            -not (Split-Path -Leaf $backup).StartsWith(
+                'WireguardSplitTunnel.backup-',
+                [StringComparison]::Ordinal)))) {
+        throw 'Interrupted install transaction paths are invalid.'
+    }
+
+    Write-Host '[INSTALL] Recovering an interrupted install transaction...'
+    if ($null -ne $backup -and
+        (Test-Path -LiteralPath $backup -PathType Container)) {
+        if (Test-Path -LiteralPath $install -PathType Container) {
+            Stop-WgstProtectedInstallProcessesForMaintenance `
+                -InstallRoot $install
+            Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
+                -PackageRoot $install
+            $failed = Join-Path $parent (
+                'WireguardSplitTunnel.failed-' +
+                [Guid]::NewGuid().ToString('N'))
+            Move-Item -LiteralPath $install -Destination $failed
+        }
+        Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
+            -PackageRoot $backup
+        Move-Item -LiteralPath $backup -Destination $install
+    }
+    if (Test-Path -LiteralPath $staging -PathType Container) {
+        Remove-WgstProtectedInstallStaging `
+            -InstallRoot $install `
+            -StagingRoot $staging
+    }
+    Remove-WgstInstallTransactionJournal -InstallRoot $install
+}
+
+function Complete-WgstProtectedInstallReplacement {
+    if ($null -eq $script:WgstLastInstallReplacement) {
+        return
+    }
+    Remove-WgstInstallTransactionJournal `
+        -InstallRoot ([string]$script:WgstLastInstallReplacement.InstallRoot)
+    $script:WgstLastInstallReplacement = $null
+}
+
+function Copy-WgstInstalledRuntimeExtras {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstalledRoot,
+        [Parameter(Mandatory = $true)][string]$StagingRoot
+    )
+
+    $sourceRoot = [IO.Path]::GetFullPath($InstalledRoot).TrimEnd('\')
+    $targetRoot = [IO.Path]::GetFullPath($StagingRoot).TrimEnd('\')
+    Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
+        -PackageRoot $sourceRoot
+    Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
+        -PackageRoot $targetRoot
+
+    $relativeFiles = [Collections.Generic.List[string]]::new()
+    foreach ($relative in @(
+            'install.status.txt',
+            'runtime.log',
+            'WireguardSplitTunnel\runtime.log')) {
+        if (Test-Path -LiteralPath (Join-Path $sourceRoot $relative) `
+                -PathType Leaf) {
+            $relativeFiles.Add($relative)
+        }
+    }
+    $logsRoot = Join-Path $sourceRoot 'logs'
+    if (Test-Path -LiteralPath $logsRoot -PathType Container) {
+        foreach ($item in @(Get-ChildItem -LiteralPath $logsRoot `
+                -Recurse -Force)) {
+            if (($item.Attributes -band
+                    [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw 'Installed runtime logs contain a reparse point.'
+            }
+            if (-not $item.PSIsContainer) {
+                $relativeFiles.Add((Get-WgstContainedRelativePath `
+                    -Root $sourceRoot `
+                    -Path $item.FullName))
+            }
+        }
+    }
+    if ($relativeFiles.Count -gt $script:WgstContract.maximumEntries) {
+        throw 'Installed runtime logs contain too many files.'
+    }
+
+    [long]$totalBytes = 0
+    foreach ($relative in $relativeFiles) {
+        $source = Join-Path $sourceRoot $relative
+        $sourceItem = Get-Item -LiteralPath $source -Force
+        if ($sourceItem.PSIsContainer -or
+            ($sourceItem.Attributes -band
+                [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'Installed runtime data is unsafe.'
+        }
+        $totalBytes += $sourceItem.Length
+        if ($totalBytes -gt $script:WgstContract.maximumExpandedBytes) {
+            throw 'Installed runtime data exceeds its byte limit.'
+        }
+        $target = Join-Path $targetRoot $relative
+        [void](Get-WgstContainedRelativePath `
+            -Root $targetRoot `
+            -Path $target)
+        if (Test-Path -LiteralPath $target) {
+            throw 'Installed runtime data collides with a managed payload.'
+        }
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $target))
+        [IO.File]::Copy($source, $target, $false)
+    }
+}
+
+function New-WgstProtectedInstallStaging {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [Parameter(Mandatory = $true)]$SourcePlan
+    )
+
+    $install = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    $installParent = Split-Path -Parent $install
+    if (-not (Test-WgstProtectedInstallParentAuthority `
+            -InstallRoot $install)) {
+        throw 'Program Files install authority is unsafe.'
+    }
+    $installParentIdentity = Get-WgstNativeFileSnapshot `
+        -Path $installParent `
+        -Directory
+    $staging = Join-Path $installParent (
+        'WireguardSplitTunnel.install-' +
+        [Guid]::NewGuid().ToString('N'))
+    $created = $false
+    try {
+        $security = New-WgstExactProtectedSecurity -Directory $true
+        $privilege =
+            [WireguardSplitTunnel.ReleaseScripts.NativeFileIdentity]::
+                EnableRestorePrivilege()
+        try {
+            [IO.DirectoryInfo]::new($staging).Create($security)
+        }
+        finally {
+            $privilege.Dispose()
+        }
+        $created = $true
+        if (-not (Test-WgstProtectedRepairAcl $staging)) {
+            throw 'Protected install staging ACL validation failed.'
+        }
+        $installParentAfterCreate = Get-WgstNativeFileSnapshot `
+            -Path $installParent `
+            -Directory
+        if (-not (Test-WgstSameNativeFileSnapshot `
+                -Before $installParentIdentity `
+                -After $installParentAfterCreate)) {
+            throw 'Program Files identity changed during staging creation.'
+        }
+
+        $directorySecurity = New-WgstExactProtectedSecurity -Directory $true
+        $directoryPrivilege =
+            [WireguardSplitTunnel.ReleaseScripts.NativeFileIdentity]::
+                EnableRestorePrivilege()
+        try {
+            foreach ($directory in @($SourcePlan.Directories | Where-Object {
+                    $_.Scope -ceq 'DescendantDirectory'
+                })) {
+                $target = Join-Path $staging $directory.RelativePath
+                [IO.DirectoryInfo]::new($target).Create($directorySecurity)
+                if (-not (Test-WgstProtectedRepairAcl $target)) {
+                    throw 'Protected install directory ACL validation failed.'
+                }
+            }
+        }
+        finally {
+            $directoryPrivilege.Dispose()
+        }
+
+        foreach ($source in $SourcePlan.Files) {
+            Assert-WgstInstalledReleaseAclTargetIdentity `
+                -Target $SourcePlan.Directories[0]
+            $target = Join-Path $staging (
+                $source.RelativePath.Replace(
+                    '/',
+                    [IO.Path]::DirectorySeparatorChar))
+            Copy-WgstBoundManagedFile -Source $source -TargetPath $target
+        }
+        foreach ($source in @($SourcePlan.Directories) +
+                @($SourcePlan.Files)) {
+            Assert-WgstInstalledReleaseAclTargetIdentity -Target $source
+        }
+        [void](Test-WgstReleasePackageNoSdk `
+            -PackageRoot $staging `
+            -ExpectedTag $SourcePlan.Tag)
+        [void](Set-WgstAuthenticatedBundledReleaseAcl `
+            -PackageRoot $staging)
+        $stagedPlan = Get-WgstAuthenticatedBundledReleaseAclPlan `
+            -PackageRoot $staging
+        if (-not (Test-WgstPackageTreesEqual `
+                -Left $SourcePlan.Root `
+                -Right $staging) -or
+            -not (Test-WgstInstalledReleaseAclPlanExact `
+                -Plan $stagedPlan) -or
+            -not (Test-WgstBundledRelease -PackageRoot $staging)) {
+            throw 'Protected install staging failed final validation.'
+        }
+        $created = $false
+        return $staging
+    }
+    finally {
+        if ($created -and (Test-Path -LiteralPath $staging)) {
+            try {
+                Remove-WgstProtectedInstallStaging `
+                    -InstallRoot $install `
+                    -StagingRoot $staging
+            }
+            catch {
+                Write-Warning (
+                    'Protected install staging was preserved because safe ' +
+                    "cleanup could not be certified: $($_.Exception.Message)")
+            }
+        }
+    }
+}
+
+function Undo-WgstProtectedInstallReplacement {
+    $transaction = $script:WgstLastInstallReplacement
+    if ($null -eq $transaction) {
+        return $null
+    }
+
+    $expected = Get-WgstProtectedInstallRoot
+    $install = [IO.Path]::GetFullPath(
+        [string]$transaction.InstallRoot).TrimEnd('\')
+    $parent = Split-Path -Parent $expected
+    $backup = if ([string]::IsNullOrWhiteSpace(
+            [string]$transaction.BackupRoot)) {
+        $null
+    }
+    else {
+        [IO.Path]::GetFullPath([string]$transaction.BackupRoot).TrimEnd('\')
+    }
+    if ($install -ine $expected -or
+        ($null -ne $backup -and (
+            (Split-Path -Parent $backup) -ine $parent -or
+            -not (Split-Path -Leaf $backup).StartsWith(
+                'WireguardSplitTunnel.backup-',
+                [StringComparison]::Ordinal)))) {
+        throw 'Protected install rollback boundary is invalid.'
+    }
+
+    if (Test-Path -LiteralPath $install -PathType Container) {
+        Stop-WgstProtectedInstallProcessesForMaintenance `
+            -InstallRoot $install
+        Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
+            -PackageRoot $install
+        $failed = Join-Path $parent (
+            'WireguardSplitTunnel.failed-' +
+            [Guid]::NewGuid().ToString('N'))
+        Move-Item -LiteralPath $install -Destination $failed
+    }
+    if ($null -ne $backup -and
+        (Test-Path -LiteralPath $backup -PathType Container)) {
+        Assert-WgstInstalledReleaseTreeHasNoReparsePoints `
+            -PackageRoot $backup
+        Move-Item -LiteralPath $backup -Destination $install
+    }
+    Remove-WgstInstallTransactionJournal -InstallRoot $install
+    $script:WgstLastInstallReplacement = $null
+    if (Test-Path -LiteralPath $install -PathType Container) {
+        return $install
+    }
+    return $null
+}
+
 function Update-WgstProtectedInstalledRelease {
-    # Replaces an exact, validated protected installation with the
-    # authenticated bundled package in place (reinstall or upgrade), using
-    # the same certified managed-file replacement as blocked-update repair,
-    # then removes managed files the new manifest no longer declares.
     param(
         [Parameter(Mandatory = $true)][string]$InstallRoot,
         [Parameter(Mandatory = $true)]$ExistingPlan,
@@ -2852,67 +3468,94 @@ function Update-WgstProtectedInstalledRelease {
             'older version.')
     }
 
-    $inUse = @(Get-WgstProtectedInstallProcessesInUse -InstallRoot $InstallRoot)
-    if ($inUse.Count -gt 0) {
-        $names = @($inUse | ForEach-Object { "$($_.Name) (PID $($_.Id))" }) -join ', '
-        throw (
-            "Wireguard Split Tunnel is still running: $names. Close it " +
-            '(also from the tray icon), then run install.cmd again.')
-    }
-
     Write-Host (
-        "[INSTALL] $decision" + ': replacing installed ' +
-        "$installedVersion with $packageVersion in place...")
-    [void](Repair-WgstProtectedInstalledRelease `
+        "[INSTALL] $decision" + ': staging replacement of installed ' +
+        "$installedVersion with $packageVersion...")
+    Stop-WgstProtectedInstallProcessesForMaintenance `
+        -InstallRoot $InstallRoot
+    $staging = New-WgstProtectedInstallStaging `
         -InstallRoot $InstallRoot `
-        -AuthenticatedPackageRoot $SourcePlan.Root)
-
-    $staleFiles = @(Get-WgstStaleManagedRelativePaths `
-        -InstalledManagedPaths @($ExistingPlan.Files |
-            ForEach-Object { [string]$_.RelativePath }) `
-        -PackageManagedPaths @($SourcePlan.Files |
-            ForEach-Object { [string]$_.RelativePath }))
-    foreach ($relative in $staleFiles) {
-        $path = Join-Path $InstallRoot (
-            $relative.Replace('/', [IO.Path]::DirectorySeparatorChar))
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            continue
+        -SourcePlan $SourcePlan
+    Copy-WgstInstalledRuntimeExtras `
+        -InstalledRoot $InstallRoot `
+        -StagingRoot $staging
+    $transactionId = [Guid]::NewGuid().ToString('N')
+    $backup = Join-Path (Split-Path -Parent $InstallRoot) (
+        'WireguardSplitTunnel.backup-' +
+        [Guid]::NewGuid().ToString('N'))
+    try {
+        [void](Write-WgstInstallTransactionJournal `
+            -InstallRoot $InstallRoot `
+            -TransactionId $transactionId `
+            -Phase Staged `
+            -StagingRoot $staging `
+            -BackupRoot $backup)
+        [void](Write-WgstInstallTransactionJournal `
+            -InstallRoot $InstallRoot `
+            -TransactionId $transactionId `
+            -Phase Switching `
+            -StagingRoot $staging `
+            -BackupRoot $backup)
+        $result = Invoke-WgstDirectorySwapTransaction `
+            -InstallRoot $InstallRoot `
+            -StagingRoot $staging `
+            -BackupRoot $backup `
+            -Validator {
+                param($publishedRoot)
+                $updated = Get-WgstAuthenticatedBundledReleaseAclPlan `
+                    -PackageRoot $publishedRoot
+                return (Test-WgstPackageTreesEqual `
+                        -Left $SourcePlan.Root `
+                        -Right $publishedRoot) -and
+                    (Test-WgstInstalledReleaseAclPlanExact -Plan $updated) -and
+                    (Test-WgstBundledRelease -PackageRoot $publishedRoot)
+            }
+        $script:WgstLastInstallReplacement = [pscustomobject]@{
+            InstallRoot = $result.InstallRoot
+            BackupRoot = $result.BackupRoot
+            TransactionId = $transactionId
         }
-        $item = Get-Item -LiteralPath $path -Force
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Stale managed file is a reparse point: $relative"
+        [void](Write-WgstInstallTransactionJournal `
+            -InstallRoot $InstallRoot `
+            -TransactionId $transactionId `
+            -Phase Published `
+            -StagingRoot $staging `
+            -BackupRoot $backup)
+        return $result.InstallRoot
+    }
+    catch {
+        $failure = $_
+        if ($null -ne $script:WgstLastInstallReplacement) {
+            try {
+                [void](Undo-WgstProtectedInstallReplacement)
+            }
+            catch {
+                throw (
+                    'Install publication failed and its rollback could not ' +
+                    "be completed: $($_.Exception.Message). Original error: " +
+                    $failure.Exception.Message)
+            }
         }
-        Remove-Item -LiteralPath $path -Force
-    }
-    $staleDirectories = @(Get-WgstStaleManagedRelativePaths `
-        -InstalledManagedPaths @($ExistingPlan.Directories |
-            Where-Object { $_.Scope -ceq 'DescendantDirectory' } |
-            ForEach-Object { [string]$_.RelativePath }) `
-        -PackageManagedPaths @($SourcePlan.Directories |
-            Where-Object { $_.Scope -ceq 'DescendantDirectory' } |
-            ForEach-Object { [string]$_.RelativePath }))
-    foreach ($relative in @($staleDirectories |
-            Sort-Object { $_.Length } -Descending)) {
-        $path = Join-Path $InstallRoot $relative
-        if ((Test-Path -LiteralPath $path -PathType Container) -and
-            @(Get-ChildItem -LiteralPath $path -Force).Count -eq 0) {
-            Remove-Item -LiteralPath $path -Force
+        else {
+            if (Test-Path -LiteralPath $staging -PathType Container) {
+                try {
+                    Remove-WgstProtectedInstallStaging `
+                        -InstallRoot $InstallRoot `
+                        -StagingRoot $staging
+                }
+                catch {
+                    Write-Warning (
+                        'Failed staging was preserved because safe cleanup ' +
+                        "could not be certified: $($_.Exception.Message)")
+                }
+            }
+            Remove-WgstInstallTransactionJournal -InstallRoot $InstallRoot
         }
+        throw $failure
     }
-
-    $updated = Get-WgstAuthenticatedBundledReleaseAclPlan `
-        -PackageRoot $InstallRoot
-    if (-not (Test-WgstPackageTreesEqual `
-            -Left $SourcePlan.Root `
-            -Right $InstallRoot) -or
-        -not (Test-WgstInstalledReleaseAclPlanExact -Plan $updated) -or
-        -not (Test-WgstBundledRelease -PackageRoot $InstallRoot)) {
-        throw 'Protected installed Release replacement failed final validation.'
-    }
-    return $InstallRoot
 }
 
-function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
+function Install-WgstAuthenticatedBundledReleaseToProtectedAnchorCore {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$PackageRoot,
@@ -2938,6 +3581,10 @@ function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
             -InstallRoot $installRoot)) {
         throw 'Program Files install authority is unsafe.'
     }
+    if (-not $RepairBootstrap) {
+        Recover-WgstInterruptedInstallTransaction `
+            -InstallRoot $installRoot
+    }
     $installParent = Split-Path -Parent $installRoot
     $installParentIdentity = Get-WgstNativeFileSnapshot `
         -Path $installParent `
@@ -2945,31 +3592,45 @@ function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
 
     if (-not $RepairBootstrap -and
         (Test-Path -LiteralPath $installRoot)) {
+        Assert-WgstSafeProtectedInstallRootForReplacement `
+            -InstallRoot $installRoot
+        $existing = $null
         try {
             $existing = Get-WgstAuthenticatedBundledReleaseAclPlan `
                 -PackageRoot $installRoot
         }
         catch {
-            throw (
-                "The existing installation at $installRoot could not be " +
-                "validated: $($_.Exception.Message) Delete that folder " +
-                '(Administrator rights required), then run install.cmd again.')
+            Write-Warning (
+                'The existing managed package is damaged and will be ' +
+                "replaced as one staged transaction: $($_.Exception.Message)")
         }
-        if (-not (Test-WgstInstalledReleaseAclPlanExact -Plan $existing)) {
-            throw (
-                "The existing installation at $installRoot does not carry " +
-                'the exact protected security policy and will not be ' +
-                'replaced in place. Delete that folder (Administrator ' +
-                'rights required), then run install.cmd again.')
-        }
-        if (Test-WgstPackageTreesEqual `
+        if ($null -ne $existing -and
+            (Test-WgstInstalledReleaseAclPlanExact -Plan $existing) -and
+            (Test-WgstPackageTreesEqual `
                 -Left $sourcePlan.Root `
-                -Right $installRoot) {
+                -Right $installRoot)) {
             return $installRoot
+        }
+        $installedVersion = if ($null -ne $existing) {
+            ([string]$existing.Tag).Substring(1)
+        }
+        else {
+            Get-WgstInstalledReleaseVersionForReplacement `
+                -InstallRoot $installRoot
+        }
+        $replacementPlan = if ($null -ne $existing) {
+            $existing
+        }
+        else {
+            [pscustomobject]@{
+                Tag = "v$installedVersion"
+                Files = @()
+                Directories = @()
+            }
         }
         return Update-WgstProtectedInstalledRelease `
             -InstallRoot $installRoot `
-            -ExistingPlan $existing `
+            -ExistingPlan $replacementPlan `
             -SourcePlan $sourcePlan
     }
 
@@ -3063,6 +3724,24 @@ function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
         if (Test-Path -LiteralPath $installRoot) {
             throw 'Protected install root appeared during staging.'
         }
+        $transactionId = [Guid]::NewGuid().ToString('N')
+        [void](Write-WgstInstallTransactionJournal `
+            -InstallRoot $installRoot `
+            -TransactionId $transactionId `
+            -Phase Staged `
+            -StagingRoot $staging `
+            -BackupRoot $null)
+        [void](Write-WgstInstallTransactionJournal `
+            -InstallRoot $installRoot `
+            -TransactionId $transactionId `
+            -Phase Switching `
+            -StagingRoot $staging `
+            -BackupRoot $null)
+        $script:WgstLastInstallReplacement = [pscustomobject]@{
+            InstallRoot = $installRoot
+            BackupRoot = $null
+            TransactionId = $transactionId
+        }
         $installParentBeforeMove = Get-WgstNativeFileSnapshot `
             -Path $installParent `
             -Directory
@@ -3087,6 +3766,12 @@ function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
                 -InstallRoot $installRoot)) {
             throw 'Protected installed Release validation failed.'
         }
+        [void](Write-WgstInstallTransactionJournal `
+            -InstallRoot $installRoot `
+            -TransactionId $transactionId `
+            -Phase Published `
+            -StagingRoot $staging `
+            -BackupRoot $null)
         return $installRoot
     }
     finally {
@@ -3103,6 +3788,47 @@ function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
             }
         }
     }
+}
+
+function Install-WgstAuthenticatedBundledReleaseToProtectedAnchor {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$PackageRoot,
+        [Parameter(Mandatory = $true)]
+        [uint32]$ExpectedVolumeSerialNumber,
+        [Parameter(Mandatory = $true)]
+        [uint64]$ExpectedFileIndex,
+        [Parameter(Mandatory = $true)]
+        [long]$ExpectedManifestLength,
+        [Parameter(Mandatory = $true)]
+        [string]$ExpectedManifestSha256,
+        [switch]$RepairBootstrap
+    )
+
+    return Invoke-WgstWithProtectedUpdateMutex `
+        -ArgumentList @(
+            $PackageRoot,
+            $ExpectedVolumeSerialNumber,
+            $ExpectedFileIndex,
+            $ExpectedManifestLength,
+            $ExpectedManifestSha256,
+            [bool]$RepairBootstrap) `
+        -Action {
+            param(
+                $BoundPackageRoot,
+                $BoundVolumeSerialNumber,
+                $BoundFileIndex,
+                $BoundManifestLength,
+                $BoundManifestSha256,
+                [bool]$BoundRepairBootstrap)
+            Install-WgstAuthenticatedBundledReleaseToProtectedAnchorCore `
+                -PackageRoot ([string]$BoundPackageRoot) `
+                -ExpectedVolumeSerialNumber ([uint32]$BoundVolumeSerialNumber) `
+                -ExpectedFileIndex ([uint64]$BoundFileIndex) `
+                -ExpectedManifestLength ([long]$BoundManifestLength) `
+                -ExpectedManifestSha256 ([string]$BoundManifestSha256) `
+                -RepairBootstrap:$BoundRepairBootstrap
+        }
 }
 
 function Test-WgstProtectedRepairAcl {
@@ -3524,7 +4250,9 @@ function Repair-WgstProtectedInstalledRelease {
                         -After $targetCurrent)) {
                     throw 'Installed managed file changed during repair.'
                 }
-                [IO.File]::Replace($temporary, $target, $null)
+                Replace-WgstManagedFileAtomically `
+                    -ReplacementPath $temporary `
+                    -TargetPath $target
             }
             else {
                 [IO.File]::Move($temporary, $target)

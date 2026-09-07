@@ -1,35 +1,3 @@
-@echo off
-setlocal
-
-set "WGST_INSTALL_CMD=%~f0"
-set "WGST_INSTALL_ROOT=%~dp0"
-set "WGST_INSTALL_ARGS=%*"
-set "LOG_DIR=%LOCALAPPDATA%\WireguardSplitTunnel\logs"
-set "LOG_FILE=%LOG_DIR%\install.cmd.log"
-set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
-
-if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-if not exist "%PS_EXE%" (
-    echo [INSTALL] Trusted Windows PowerShell is missing.
-    echo [INSTALL] Trusted Windows PowerShell is missing. > "%LOG_FILE%"
-    pause
-    exit /b 9009
-)
-echo [%date% %time%] [INSTALL.CMD] starting standalone bootstrap > "%LOG_FILE%"
-echo [INSTALL] command="%WGST_INSTALL_CMD%" root="%WGST_INSTALL_ROOT%" >> "%LOG_FILE%"
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -Command "$c=[IO.File]::ReadAllText($env:WGST_INSTALL_CMD);$m='# WGST_EMBEDDED_INSTALLER_V0210';$i=$c.LastIndexOf($m,[StringComparison]::Ordinal);if($i-lt0){throw 'Embedded installer payload is missing.'};&([ScriptBlock]::Create($c.Substring($i+$m.Length))) -InstallerRoot $env:WGST_INSTALL_ROOT -ForwardedArguments $env:WGST_INSTALL_ARGS" >> "%LOG_FILE%" 2>&1
-set "EXIT_CODE=%ERRORLEVEL%"
-
-if not "%EXIT_CODE%"=="0" (
-    echo [INSTALL] install.cmd failed with exit code %EXIT_CODE%.
-    echo [INSTALL] install.cmd failed with exit code %EXIT_CODE%. >> "%LOG_FILE%"
-    echo See log: "%LOG_FILE%"
-    pause
-)
-
-exit /b %EXIT_CODE%
-
-# WGST_EMBEDDED_INSTALLER_V0210
 param(
     [Parameter(Mandatory = $true)][string]$InstallerRoot,
     [string]$ForwardedArguments
@@ -125,7 +93,6 @@ function Invoke-WgstBootstrapHttpGet {
                  [long]$declaredLength -gt $MaximumBytes)) {
                 throw 'Release download exceeds its byte limit.'
             }
-
             $input = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
             $output = if ([string]::IsNullOrWhiteSpace($OutputPath)) {
                 [IO.MemoryStream]::new()
@@ -245,27 +212,15 @@ function Test-WgstCompleteLocalRelease {
         foreach ($required in $requiredFiles | Where-Object {
                 $_ -cne 'release-manifest.json'
             }) {
-            if (-not $seen.Contains($required.Replace('\', '/'))) {
-                throw "required file is not manifest-bound: $required"
-            }
+            if (-not $seen.Contains($required.Replace('\', '/'))) { throw "required file is not manifest-bound: $required" }
         }
-        foreach ($item in Get-ChildItem -LiteralPath $canonicalRoot `
-                -Recurse -Force -File) {
-            if (($item.Attributes -band
-                    [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw 'local package contains a reparse point'
-            }
-            $relative = $item.FullName.Substring(
-                $canonicalRoot.Length + 1).Replace('\', '/')
+        foreach ($item in Get-ChildItem -LiteralPath $canonicalRoot -Recurse -Force -File) {
+            if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'local package contains a reparse point' }
+            $relative = $item.FullName.Substring($canonicalRoot.Length + 1).Replace('\', '/')
             if ($relative -ceq 'release-manifest.json' -or
                 $seen.Contains($relative) -or
-                $relative.StartsWith(
-                    'logs/',
-                    [StringComparison]::OrdinalIgnoreCase) -or
-                $relative -in @(
-                    'runtime.log',
-                    'install.status.txt',
-                    'WireguardSplitTunnel/runtime.log')) {
+                $relative.StartsWith('logs/', [StringComparison]::OrdinalIgnoreCase) -or
+                $relative -in @('runtime.log', 'install.status.txt', 'WireguardSplitTunnel/runtime.log')) {
                 continue
             }
             throw "local package contains an undeclared file: $relative"
@@ -325,56 +280,41 @@ function Get-WgstOfficialRelease {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $client = New-WgstBootstrapHttpClient
     try {
-    $releaseBytes = Invoke-WgstBootstrapHttpGet `
-        -Client $client `
-        -Uri ([Uri]$apiUri) `
-        -MaximumBytes 2MB
-    $releaseText = [Text.UTF8Encoding]::new(
-        $false,
-        $true).GetString($releaseBytes)
-    $release = $releaseText | ConvertFrom-Json
-    if ($release.draft -or $release.prerelease -or
-        [string]$release.tag_name -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-        throw 'GitHub latest Release is not a stable normalized version.'
-    }
-    $version = [version]([string]$release.tag_name).Substring(1)
-    if ($version -lt $minimumInstallerVersion) {
-        throw "Latest stable Release $($release.tag_name) predates the standalone installer floor v$minimumInstallerVersion."
-    }
-    $archives = @($release.assets | Where-Object { [string]$_.name -ceq $archiveName })
-    $sidecars = @($release.assets | Where-Object { [string]$_.name -ceq $checksumName })
-    if ($archives.Count -ne 1 -or $sidecars.Count -ne 1) {
-        throw 'Latest stable Release does not contain one exact Windows archive and checksum.'
-    }
-    $archive = Join-Path $WorkingRoot $archiveName
-    $sidecar = Join-Path $WorkingRoot $checksumName
-    [void](Invoke-WgstBootstrapHttpGet `
-        -Client $client `
-        -Uri ([Uri]$sidecars[0].browser_download_url) `
-        -MaximumBytes 4KB `
-        -OutputPath $sidecar)
-    [void](Invoke-WgstBootstrapHttpGet `
-        -Client $client `
-        -Uri ([Uri]$archives[0].browser_download_url) `
-        -MaximumBytes $maximumArchiveBytes `
-        -OutputPath $archive)
-    $checksumText = [Text.UTF8Encoding]::new($false, $true).GetString([IO.File]::ReadAllBytes($sidecar))
-    if ($checksumText -cnotmatch '^([0-9a-f]{64})  wireguard-split-tunnel-win-x64\.zip\n$') {
-        throw 'Release checksum sidecar is not canonical.'
-    }
-    $expectedDigest = $Matches[1]
+        $releaseBytes = Invoke-WgstBootstrapHttpGet -Client $client -Uri ([Uri]$apiUri) -MaximumBytes 2MB
+        $releaseText = [Text.UTF8Encoding]::new($false, $true).GetString($releaseBytes)
+        $release = $releaseText | ConvertFrom-Json
+        if ($release.draft -or $release.prerelease -or
+            [string]$release.tag_name -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'GitHub latest Release is not a stable normalized version.'
+        }
+        $version = [version]([string]$release.tag_name).Substring(1)
+        if ($version -lt $minimumInstallerVersion) {
+            throw "Latest stable Release $($release.tag_name) predates the standalone installer floor v$minimumInstallerVersion."
+        }
+        $archives = @($release.assets | Where-Object { [string]$_.name -ceq $archiveName })
+        $sidecars = @($release.assets | Where-Object { [string]$_.name -ceq $checksumName })
+        if ($archives.Count -ne 1 -or $sidecars.Count -ne 1) {
+            throw 'Latest stable Release does not contain one exact Windows archive and checksum.'
+        }
+        $archive = Join-Path $WorkingRoot $archiveName
+        $sidecar = Join-Path $WorkingRoot $checksumName
+        [void](Invoke-WgstBootstrapHttpGet -Client $client -Uri ([Uri]$sidecars[0].browser_download_url) -MaximumBytes 4KB -OutputPath $sidecar)
+        [void](Invoke-WgstBootstrapHttpGet -Client $client -Uri ([Uri]$archives[0].browser_download_url) -MaximumBytes $maximumArchiveBytes -OutputPath $archive)
+        $checksumText = [Text.UTF8Encoding]::new($false, $true).GetString([IO.File]::ReadAllBytes($sidecar))
+        if ($checksumText -cnotmatch '^([0-9a-f]{64})  wireguard-split-tunnel-win-x64\.zip\n$') {
+            throw 'Release checksum sidecar is not canonical.'
+        }
+        $expectedDigest = $Matches[1]
         $digest = Get-WgstBootstrapSha256 -Path $archive
-    if ($digest -cne $expectedDigest) { throw 'Downloaded Release archive does not match its checksum.' }
-    $package = Join-Path $WorkingRoot 'package'
-    Expand-WgstSafeReleaseArchive -Archive $archive -Destination $package
-    if (-not (Test-WgstCompleteLocalRelease $package)) {
-        throw 'Downloaded Release package failed complete manifest validation.'
+        if ($digest -cne $expectedDigest) { throw 'Downloaded Release archive does not match its checksum.' }
+        $package = Join-Path $WorkingRoot 'package'
+        Expand-WgstSafeReleaseArchive -Archive $archive -Destination $package
+        if (-not (Test-WgstCompleteLocalRelease $package)) {
+            throw 'Downloaded Release package failed complete manifest validation.'
+        }
+        return $package
     }
-    return $package
-    }
-    finally {
-        $client.Dispose()
-    }
+    finally { $client.Dispose() }
 }
 
 $root = [IO.Path]::GetFullPath($InstallerRoot)

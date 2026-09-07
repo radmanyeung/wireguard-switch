@@ -628,7 +628,109 @@ public sealed class InstallerBootstrapTests : IDisposable
     }
 
     [Fact]
-    public void ProtectedAnchor_ReplacesAnExactExistingInstallInPlaceButNeverDowngrades()
+    public void ManagedFileReplacement_ReplacesExistingFileWithoutAnEmptyBackupPath()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var source = Path.Combine(_fixture.Root, "replacement.tmp");
+        var target = Path.Combine(_fixture.Root, "installed.txt");
+        File.WriteAllText(source, "new");
+        File.WriteAllText(target, "old");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($Source, $Target)
+                Replace-WgstManagedFileAtomically `
+                    -ReplacementPath $Source `
+                    -TargetPath $Target
+            } '{{Escape(source)}}' '{{Escape(target)}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        File.ReadAllText(target).Should().Be("new");
+        File.Exists(source).Should().BeFalse();
+        Directory.EnumerateFiles(_fixture.Root, "*.replace-backup-*")
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DirectorySwapTransaction_PublishesCandidateAndPreservesRollbackBackup()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var install = Path.Combine(_fixture.Root, "swap-installed");
+        var staging = Path.Combine(_fixture.Root, "swap-staging");
+        var backup = Path.Combine(_fixture.Root, "swap-backup");
+        Directory.CreateDirectory(install);
+        Directory.CreateDirectory(staging);
+        File.WriteAllText(Path.Combine(install, "version.txt"), "old");
+        File.WriteAllText(Path.Combine(staging, "version.txt"), "new");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($Install, $Staging, $Backup)
+                Invoke-WgstDirectorySwapTransaction `
+                    -InstallRoot $Install `
+                    -StagingRoot $Staging `
+                    -BackupRoot $Backup `
+                    -Validator { param($Root) return $true }
+            } '{{Escape(install)}}' '{{Escape(staging)}}' '{{Escape(backup)}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        File.ReadAllText(Path.Combine(install, "version.txt")).Should().Be("new");
+        File.ReadAllText(Path.Combine(backup, "version.txt")).Should().Be("old");
+        Directory.Exists(staging).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DirectorySwapTransaction_RestoresOldInstallWhenCandidateValidationFails()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var install = Path.Combine(_fixture.Root, "failed-installed");
+        var staging = Path.Combine(_fixture.Root, "failed-staging");
+        var backup = Path.Combine(_fixture.Root, "failed-backup");
+        Directory.CreateDirectory(install);
+        Directory.CreateDirectory(staging);
+        File.WriteAllText(Path.Combine(install, "version.txt"), "old");
+        File.WriteAllText(Path.Combine(staging, "version.txt"), "new");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($Install, $Staging, $Backup)
+                Invoke-WgstDirectorySwapTransaction `
+                    -InstallRoot $Install `
+                    -StagingRoot $Staging `
+                    -BackupRoot $Backup `
+                    -Validator { param($Root) return $false }
+            } '{{Escape(install)}}' '{{Escape(staging)}}' '{{Escape(backup)}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().NotBe(0);
+        File.ReadAllText(Path.Combine(install, "version.txt")).Should().Be("old");
+        Directory.Exists(backup).Should().BeFalse();
+        Directory.EnumerateDirectories(_fixture.Root, "failed-installed.failed-*")
+            .Should().ContainSingle();
+    }
+
+    [Fact]
+    public void MaintenanceEventName_MatchesTheApplicationContract()
     {
         var modulePath = Path.Combine(
             _fixture.ActualRepositoryRoot,
@@ -638,24 +740,281 @@ public sealed class InstallerBootstrapTests : IDisposable
             $ErrorActionPreference = 'Stop'
             $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
             & $module {
-                $anchor = ${function:Install-WgstAuthenticatedBundledReleaseToProtectedAnchor}.ToString()
-                $update = ${function:Update-WgstProtectedInstalledRelease}.ToString()
-                if ($anchor -notmatch 'Update-WgstProtectedInstalledRelease' -or
-                    $anchor -notmatch 'Test-WgstInstalledReleaseAclPlanExact' -or
-                    $update -notmatch 'Repair-WgstProtectedInstalledRelease' -or
-                    $update -notmatch 'Get-WgstProtectedInstallProcessesInUse' -or
-                    $update -notmatch "'Downgrade'" -or
-                    $update -notmatch 'Test-WgstBundledRelease') {
-                    throw 'In-place replacement contract is missing.'
-                }
-                'in-place'
+                Get-WgstInstallerMaintenanceEventName `
+                    -ProcessId 42 `
+                    -CreationTimeFileTimeUtc 1337
             }
             """;
 
         var result = _fixture.RunInlinePowerShell(script);
 
         result.ExitCode.Should().Be(0, result.CombinedOutput);
-        result.StandardOutput.Trim().Should().Be("in-place");
+        result.StandardOutput.Trim().Should().Be(
+            "Local\\WireguardSplitTunnel.InstallerMaintenance.42.1337");
+    }
+
+    [Fact]
+    public void InstallCmd_ContainsStandaloneRecoveryBootstrap()
+    {
+        var command = File.ReadAllText(
+            Path.Combine(_fixture.ActualRepositoryRoot, "install.cmd"));
+
+        command.Should().Contain("WGST_EMBEDDED_INSTALLER_V0210");
+        command.Should().Contain("api.github.com/repos/radmanyeung/wireguard-switch/releases/latest");
+        command.Should().Contain("wireguard-split-tunnel-win-x64.zip.sha256");
+        command.Should().Contain("scripts\\install.ps1");
+        command.Should().Contain("AllowAutoRedirect = $false");
+        command.Should().Contain("release-assets.githubusercontent.com");
+        command.Should().Contain("maximumRedirects");
+        command.Should().Contain("maximumArchiveBytes");
+        command.Should().Contain("Get-WgstBootstrapSha256");
+        command.Should().NotContain("Get-FileHash");
+    }
+
+    [Fact]
+    public void Installer_WaitsForVersionedStartupAcknowledgementBeforeReportingSuccess()
+    {
+        var install = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "install.ps1"));
+        var start = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "start.ps1"));
+
+        install.Should().Contain("Wait-WgstInstallStartupHealth");
+        install.Should().Contain("InstallHealthToken");
+        install.Should().Contain("InstallHealthPath");
+        install.Should().Contain("$process.WaitForExit()");
+        var elevationFilePath = install.IndexOf(
+            "-FilePath (Get-WgstSystemPowerShellPath)",
+            StringComparison.Ordinal);
+        var elevationStart = install.LastIndexOf(
+            "$process = Start-Process",
+            elevationFilePath,
+            StringComparison.Ordinal);
+        var elevationEnd = install.IndexOf(
+            "if ($process.ExitCode -ne 0)",
+            elevationStart,
+            StringComparison.Ordinal);
+        install[elevationStart..elevationEnd].Should().NotContain("-Wait");
+        install.Should().Contain("health.settingsLoaded");
+        install.Should().Contain("health.mainWindowInitialized");
+        install.IndexOf("Wait-WgstInstallStartupHealth", StringComparison.Ordinal)
+            .Should().BeLessThan(
+                install.IndexOf("Write-Step 'Install completed.'", StringComparison.Ordinal));
+        start.Should().Contain("[string]$InstallHealthToken");
+        start.Should().Contain("[string]$InstallHealthPath");
+        start.Should().Contain("--install-health-token");
+        start.Should().Contain("--install-health-path");
+    }
+
+    [Fact]
+    public void App_WaitsForInstallCommitBeforeStartupRoutingWork()
+    {
+        var app = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "src",
+            "WireguardSplitTunnel.App",
+            "App.xaml.cs"));
+        var window = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "src",
+            "WireguardSplitTunnel.App",
+            "MainWindow.xaml.cs"));
+        var install = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "install.ps1"));
+
+        app.Should().Contain("InstallStartupHandshake.TryParse");
+        app.Should().Contain("InstallerMaintenanceChannel.CreateEventName");
+        window.Should().Contain("installStartupHandshake.WriteReady");
+        window.Should().Contain("WaitForInstallCommitAsync");
+        window.Should().Contain("WaitForInstallTransactionCompletionAsync");
+        window.IndexOf("installStartupHandshake.WriteReady", StringComparison.Ordinal)
+            .Should().BeLessThan(
+                window.IndexOf("WaitForInstallCommitAsync", StringComparison.Ordinal));
+        window.IndexOf("WaitForInstallCommitAsync", StringComparison.Ordinal)
+            .Should().BeLessThan(
+                window.IndexOf("AutoRenewDomainRoutesOnStartAsync", StringComparison.Ordinal));
+        window.Should().Contain("if (installCommitted && !isWindowClosing)");
+        install.Should().Contain("installHealthToken");
+        install.Should().Contain("InstallCommit");
+        install.Should().Contain("$NoPostInstallSelfTest -or");
+        install.Should().Contain("$RepairBlockedUpdate");
+        install.IndexOf("[void]$commitEvent.Set()", StringComparison.Ordinal)
+            .Should().BeLessThan(
+                install.IndexOf("Complete-WgstProtectedInstallReplacement", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ProtectedAnchor_StagesAndSwapsExistingInstallButNeverDowngrades()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                $anchor = ${function:Install-WgstAuthenticatedBundledReleaseToProtectedAnchor}.ToString() +
+                    ${function:Install-WgstAuthenticatedBundledReleaseToProtectedAnchorCore}.ToString()
+                $update = ${function:Update-WgstProtectedInstalledRelease}.ToString()
+                if ($anchor -notmatch 'Update-WgstProtectedInstalledRelease' -or
+                    $anchor -notmatch 'Test-WgstInstalledReleaseAclPlanExact' -or
+                    $update -notmatch 'New-WgstProtectedInstallStaging' -or
+                    $update -notmatch 'Invoke-WgstDirectorySwapTransaction' -or
+                    $update -notmatch 'Stop-WgstProtectedInstallProcessesForMaintenance' -or
+                    $update -notmatch "'Downgrade'" -or
+                    $update -notmatch 'Test-WgstBundledRelease') {
+                    throw 'Staged replacement contract is missing.'
+                }
+                if ($update -match 'Repair-WgstProtectedInstalledRelease') {
+                    throw 'Upgrade must not use incremental repair.'
+                }
+                'staged-swap'
+            }
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        result.StandardOutput.Trim().Should().Be("staged-swap");
+    }
+
+    [Fact]
+    public void RunningInstallMaintenance_UsesBoundEventThenExactProcessTerminationFallback()
+    {
+        var module = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1"));
+        var app = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "src",
+            "WireguardSplitTunnel.App",
+            "App.xaml.cs"));
+
+        module.Should().Contain("Stop-WgstProtectedInstallProcessesForMaintenance");
+        module.Should().Contain("[Threading.EventWaitHandle]::OpenExisting");
+        module.Should().Contain("CreationTimeFileTimeUtc");
+        module.Should().Contain("Stop-Process -Id");
+        module.Should().Contain("WireGuard tunnel service is left running");
+        app.Should().Contain("EventWaitHandleAcl.Create");
+        app.Should().Contain("WellKnownSidType.BuiltinAdministratorsSid");
+        app.Should().Contain("WellKnownSidType.LocalSystemSid");
+    }
+
+    [Fact]
+    public void ExistingProtectedCorruption_IsReplacedThroughStagingWithoutManualDeletion()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                $wrapper = ${function:Install-WgstAuthenticatedBundledReleaseToProtectedAnchor}.ToString()
+                $anchor = $wrapper +
+                    ${function:Install-WgstAuthenticatedBundledReleaseToProtectedAnchorCore}.ToString()
+                if ($anchor -notmatch 'Assert-WgstSafeProtectedInstallRootForReplacement' -or
+                    $anchor -notmatch 'Get-WgstInstalledReleaseVersionForReplacement' -or
+                    $wrapper -notmatch 'Invoke-WgstWithProtectedUpdateMutex' -or
+                    $anchor -match 'Delete that folder') {
+                    throw 'Damaged-install staging contract is missing.'
+                }
+                'repair-by-swap'
+            }
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        result.StandardOutput.Trim().Should().Be("repair-by-swap");
+    }
+
+    [Fact]
+    public void FailedInstalledStartup_RollsBackProtectedDirectoryTransaction()
+    {
+        var module = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1"));
+        var installer = File.ReadAllText(Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "install.ps1"));
+
+        module.Should().Contain("Undo-WgstProtectedInstallReplacement");
+        module.Should().Contain("WgstLastInstallReplacement");
+        installer.Should().Contain("Undo-WgstProtectedInstallReplacement");
+        installer.IndexOf("Undo-WgstProtectedInstallReplacement", StringComparison.Ordinal)
+            .Should().BeGreaterThan(
+                installer.IndexOf("& $installedScript @childArguments", StringComparison.Ordinal));
+        module.Should().Contain("Write-WgstInstallTransactionJournal");
+        module.Should().Contain("Test-WgstProtectedRepairAcl $journal");
+        module.Should().Contain("Recover-WgstInterruptedInstallTransaction");
+        module.Should().Contain("Complete-WgstProtectedInstallReplacement");
+        installer.Should().Contain("Complete-WgstProtectedInstallReplacement");
+        installer.Should().Contain("Generated protected installer bootstrap is invalid");
+        installer.IndexOf("try {", installer.IndexOf("$protectedInstallAction =", StringComparison.Ordinal), StringComparison.Ordinal)
+            .Should().BeLessThan(
+                installer.IndexOf("Install-WgstAuthenticatedBundledReleaseToProtectedAnchor", installer.IndexOf("$protectedInstallAction =", StringComparison.Ordinal), StringComparison.Ordinal));
+
+        var updateStart = module.IndexOf(
+            "function Update-WgstProtectedInstalledRelease",
+            StringComparison.Ordinal);
+        var updateEnd = module.IndexOf(
+            "function Install-WgstAuthenticatedBundledReleaseToProtectedAnchorCore",
+            updateStart,
+            StringComparison.Ordinal);
+        var update = module[updateStart..updateEnd];
+        update.IndexOf("$script:WgstLastInstallReplacement =", StringComparison.Ordinal)
+            .Should().BeLessThan(
+                update.IndexOf("-Phase Published", StringComparison.Ordinal));
+        update.IndexOf("Undo-WgstProtectedInstallReplacement", StringComparison.Ordinal)
+            .Should().BeGreaterThan(
+                update.IndexOf("catch {", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InstalledRuntimeExtras_AreCarriedWithoutCopyingUnknownExecutables()
+    {
+        var modulePath = Path.Combine(
+            _fixture.ActualRepositoryRoot,
+            "scripts",
+            "WindowsRelease.psm1");
+        var oldRoot = Path.Combine(_fixture.Root, "old-runtime");
+        var stagedRoot = Path.Combine(_fixture.Root, "staged-runtime");
+        Directory.CreateDirectory(Path.Combine(oldRoot, "logs"));
+        Directory.CreateDirectory(Path.Combine(oldRoot, "WireguardSplitTunnel"));
+        Directory.CreateDirectory(stagedRoot);
+        File.WriteAllText(Path.Combine(oldRoot, "install.status.txt"), "status");
+        File.WriteAllText(Path.Combine(oldRoot, "logs", "install.log"), "log");
+        File.WriteAllText(Path.Combine(oldRoot, "WireguardSplitTunnel", "runtime.log"), "runtime");
+        File.WriteAllText(Path.Combine(oldRoot, "unknown.exe"), "do not carry");
+
+        var script = $$"""
+            $ErrorActionPreference = 'Stop'
+            $module = Import-Module '{{Escape(modulePath)}}' -Force -PassThru
+            & $module {
+                param($Old, $Staged)
+                Copy-WgstInstalledRuntimeExtras -InstalledRoot $Old -StagingRoot $Staged
+            } '{{Escape(oldRoot)}}' '{{Escape(stagedRoot)}}'
+            """;
+
+        var result = _fixture.RunInlinePowerShell(script);
+
+        result.ExitCode.Should().Be(0, result.CombinedOutput);
+        File.Exists(Path.Combine(stagedRoot, "install.status.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(stagedRoot, "logs", "install.log")).Should().BeTrue();
+        File.Exists(Path.Combine(stagedRoot, "WireguardSplitTunnel", "runtime.log")).Should().BeTrue();
+        File.Exists(Path.Combine(stagedRoot, "unknown.exe")).Should().BeFalse();
     }
 
     [Fact]
@@ -1028,7 +1387,7 @@ public sealed class InstallerBootstrapTests : IDisposable
     }
 
     [Fact]
-    public void PostInstallSelfTest_DisablesPowerShellProfiles()
+    public void StartupVerification_UsesTheInstalledTrustedStartScript()
     {
         var install = File.ReadAllText(
             Path.Combine(
@@ -1036,14 +1395,14 @@ public sealed class InstallerBootstrapTests : IDisposable
                 "scripts",
                 "install.ps1"));
         var start = install.IndexOf(
-            "Launching app for post-install self test",
+            "Launching the installed app and waiting for startup verification",
             StringComparison.Ordinal);
         var child = install[start..].ReplaceLineEndings("\n");
 
         start.Should().BeGreaterThanOrEqualTo(0);
-        child.Should().Contain("Get-WgstSystemPowerShellPath");
-        child.Should().Contain(
-            "'-NoProfile',\n        '-ExecutionPolicy', 'Bypass'");
+        child.Should().Contain("$startScript = Join-Path $PSScriptRoot 'start.ps1'");
+        child.Should().Contain("& $startScript");
+        child.Should().Contain("Wait-WgstInstallStartupHealth");
     }
 
     [Fact]
@@ -1371,7 +1730,7 @@ public sealed class InstallerBootstrapTests : IDisposable
     }
 
     [Fact]
-    public void InstallerContract_HardensOnlyBundledReleaseBeforeSelfTest()
+    public void InstallerContract_HardensBundledReleaseBeforeStartupVerification()
     {
         var path = Path.Combine(
             _fixture.ActualRepositoryRoot,
@@ -1385,13 +1744,13 @@ public sealed class InstallerBootstrapTests : IDisposable
             "Set-WgstAuthenticatedBundledReleaseAcl",
             guard,
             StringComparison.Ordinal);
-        var selfTest = script.IndexOf(
-            "Launching app for post-install self test",
+        var startupVerification = script.IndexOf(
+            "Launching the installed app and waiting for startup verification",
             StringComparison.Ordinal);
 
         guard.Should().BeGreaterThanOrEqualTo(0);
         harden.Should().BeGreaterThan(guard);
-        selfTest.Should().BeGreaterThan(harden);
+        startupVerification.Should().BeGreaterThan(harden);
     }
 
     [Theory]
