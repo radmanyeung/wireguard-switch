@@ -2,6 +2,8 @@ param(
     [switch]$DryRun,
     [switch]$Elevated,
     [switch]$PostInstallSelfTest,
+    [string]$InstallHealthToken,
+    [string]$InstallHealthPath,
     [string]$LauncherLogPath,
     [switch]$LibraryOnly
 )
@@ -1204,12 +1206,36 @@ try {
             $appExe = $revalidatedApp
         }
 
-        $appArgs = if ($PostInstallSelfTest) { '--post-install-self-test' } else { '' }
+        $appArgs = @()
+        if ($PostInstallSelfTest) {
+            $appArgs += '--post-install-self-test'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($InstallHealthToken) -or
+            -not [string]::IsNullOrWhiteSpace($InstallHealthPath)) {
+            if ($InstallHealthToken -cnotmatch '^[0-9a-f]{32}$' -or
+                [string]::IsNullOrWhiteSpace($InstallHealthPath)) {
+                throw 'Install startup health arguments are incomplete or invalid.'
+            }
+            $expectedHealthPath = Join-Path (
+                [Environment]::GetFolderPath(
+                    [Environment+SpecialFolder]::LocalApplicationData)) (
+                "WireguardSplitTunnel\install-health\$InstallHealthToken.json")
+            if ([IO.Path]::GetFullPath($InstallHealthPath) -ine
+                [IO.Path]::GetFullPath($expectedHealthPath)) {
+                throw 'Install startup health path is outside the installer health directory.'
+            }
+            $appArgs += @(
+                '--install-health-token',
+                $InstallHealthToken,
+                '--install-health-path',
+                "`"$([IO.Path]::GetFullPath($InstallHealthPath))`""
+            )
+        }
         if ($launcherTrust.Kind -ceq 'DeveloperSource') {
             Unblock-AppFile -Path $appExe
         }
         Write-LauncherLog "Launching exe. path=$appExe args=$appArgs"
-        if ([string]::IsNullOrWhiteSpace($appArgs)) {
+        if ($appArgs.Count -eq 0) {
             Start-Process -FilePath $appExe -WorkingDirectory (Split-Path -Parent $appExe)
         }
         else {

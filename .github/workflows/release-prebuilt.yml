@@ -78,6 +78,13 @@ jobs:
           ./tests/WireguardSplitTunnel.WindowsUpdate.Tests/WireguardSplitTunnel.WindowsUpdate.Tests.csproj
           -c Release
 
+      - name: Verify standalone installer bootstrap parity
+        shell: powershell
+        run: >-
+          ./scripts/update-install-cmd.ps1
+          -RepositoryRoot .
+          -Check
+
       - name: Build Windows Release projects
         shell: pwsh
         run: |

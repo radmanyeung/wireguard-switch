@@ -6,21 +6,24 @@ An Apple Silicon macOS release is also available for tunnel control, domain
 routes, and network monitoring.
 
 ## One-click install (new PC)
-1. Copy this whole folder to the target Windows PC.
-2. Double-click `install.cmd`.
-3. Approve UAC when prompted.
+1. Double-click `install.cmd` from a Release, a GitHub source ZIP, or by itself.
+2. Approve UAC when prompted.
 
 `install.cmd` forwards parameters to `scripts\install.ps1`.
 
 Installer bootstrap does:
 - auto-elevate to Administrator
 - check/install missing `WireGuard` (official signed MSI, silent install)
-- if no local EXE and no SDK: auto-download latest prebuilt from GitHub Releases
-- require an already installed `.NET 8 SDK` only when a developer-source
-  checkout must be published locally (a Release ZIP never needs it)
+- validate a complete local v0.2.10-or-newer Release, or download one complete
+  stable Release when files are missing, damaged, or came from a source ZIP
+- use the self-contained Windows package; no .NET SDK is required
 - copy the validated Release to `C:\Program Files\WireguardSplitTunnel\`
 - create desktop shortcuts (unless skipped)
-- launch post-install self test (unless skipped)
+- stop only the verified app process through the installer-maintenance channel,
+  while leaving the WireGuard tunnel service and current tunnel running
+- stage and atomically switch the full install, preserving a rollback backup
+- launch the installed app and wait up to 60 seconds for its versioned startup
+  acknowledgement before reporting success
 
 ## New-machine install checklist (Windows)
 
@@ -30,17 +33,12 @@ Lessons from real fresh-machine installs:
    installer downloads the official MSI, checks its Authenticode signature
    (WireGuard LLC), and installs it silently. This needs internet access.
    You can also install it yourself first (https://www.wireguard.com/install/).
-2. Download `wireguard-split-tunnel-win-x64.zip` from GitHub **Releases**
-   (not the source-code ZIP from the `Code` button).
-3. Extract the ZIP into a **brand-new empty folder on a fixed local NTFS
-   drive**, for example `C:\Users\<you>\Downloads\wireguard-split-tunnel-win-x64`.
-   The installer is fail-closed and rejects:
-   - any file that is not declared in the release manifest
-     (`Release package contains an undeclared payload: ...`), so never
-     extract over an existing folder or add files afterwards;
-   - folders synced by **OneDrive** (a OneDrive-backed Desktop or Documents
-     folder counts), drive roots such as `D:\`, USB/removable drives, and
-     network shares (`Installed Release root has an unsafe authority`).
+2. Use the Release ZIP when available. Since v0.2.10, the GitHub source ZIP or
+   a standalone copy of the current `install.cmd` also downloads the complete
+   official Release automatically.
+3. A complete local Release can install offline when WireGuard is already
+   present. When package files or WireGuard are missing, internet access is
+   required; a failed download leaves the existing installation in place.
 4. Double-click `install.cmd` and approve the UAC prompt. The `install.cmd`
    window stays open on failure so you can read the error. Since v0.2.9 the
    elevated (UAC) window also stays open and shows the detailed reason when
@@ -48,14 +46,12 @@ Lessons from real fresh-machine installs:
    and only reported `Protected installer failed with exit code 1`. The
    non-elevated phase is also logged to
    `%LOCALAPPDATA%\WireguardSplitTunnel\logs\`.
-   Reinstalling or upgrading over an existing installation with `install.cmd`
-   works from v0.2.9 on: the installed copy is replaced in place with the
-   same certified file replacement the updater uses. **Close the app first**
-   (including the tray icon); the installer refuses while it is running, and
-   it never downgrades. v0.2.8 and earlier refused any existing installation
-   (`Protected install root already exists ...`) and, once the app had been
-   launched, also failed with
-   `undeclared payload: WireguardSplitTunnel/runtime.log`.
+   Since v0.2.10, reinstall and upgrade use a complete staged directory swap.
+   The installer asks a current app to exit in maintenance mode and has an
+   exact-process fallback for older releases, so the app need not be closed
+   first. Settings and logs are preserved, startup failure restores the prior
+   version, and interrupted transactions recover on the next run. The
+   installer never downgrades a healthy newer installation.
 5. After a successful install, start the app from the **desktop shortcut**
    (or `C:\Program Files\WireguardSplitTunnel\start.cmd`). The `start.cmd`
    in the extracted folder is not an entry point and always refuses.
@@ -70,8 +66,8 @@ Lessons from real fresh-machine installs:
 - After install finishes, start the app from the desktop shortcut (or `start.cmd` inside the installed copy at `C:\Program Files\WireguardSplitTunnel`). The `start.cmd` in the downloaded/extracted folder is not a launch entry point and will refuse to start by design.
 - On first launch, select a WireGuard `.conf` or `.conf.dpapi` file, then click `Enable Now`.
 - If the target PC already has a published `WireguardSplitTunnel\WireguardSplitTunnel.App.exe`, install will use it.
-- If no local EXE is present, install/start will try to fetch the latest GitHub Release prebuilt automatically.
-- If no Release prebuilt is available, the target PC may need internet access plus `.NET 8 SDK` so the installer can publish locally.
+- If the local package is incomplete, install fetches and validates one full
+  GitHub Release. It does not compile source or require a .NET SDK.
 
 ## If someone downloads from Releases
 - Download the latest `wireguard-split-tunnel-win-x64.zip` from GitHub Releases.

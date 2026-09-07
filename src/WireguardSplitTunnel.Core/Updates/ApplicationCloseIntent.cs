@@ -7,7 +7,8 @@ public enum ApplicationCloseIntent
     UnknownOrAbnormal = 0,
     UserOrApplicationClose = 1,
     SessionEnding = 2,
-    ElevationHandoff = 3
+    ElevationHandoff = 3,
+    InstallerMaintenance = 4
 }
 
 public sealed class ApplicationCloseIntentTracker
@@ -27,12 +28,35 @@ public sealed class ApplicationCloseIntentTracker
         while (true)
         {
             var current = Volatile.Read(ref _intent);
-            if (current is (int)ApplicationCloseIntent.SessionEnding or (int)ApplicationCloseIntent.ElevationHandoff)
+            if (current is (int)ApplicationCloseIntent.SessionEnding
+                or (int)ApplicationCloseIntent.ElevationHandoff
+                or (int)ApplicationCloseIntent.InstallerMaintenance)
             {
                 return;
             }
 
             if (Interlocked.CompareExchange(ref _intent, (int)ApplicationCloseIntent.ElevationHandoff, current) == current)
+            {
+                return;
+            }
+        }
+    }
+
+    public void ResolveInstallerMaintenance()
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _intent);
+            if (current is (int)ApplicationCloseIntent.SessionEnding
+                or (int)ApplicationCloseIntent.InstallerMaintenance)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(
+                    ref _intent,
+                    (int)ApplicationCloseIntent.InstallerMaintenance,
+                    current) == current)
             {
                 return;
             }

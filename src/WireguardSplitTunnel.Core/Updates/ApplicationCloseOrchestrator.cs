@@ -162,6 +162,8 @@ public sealed class ApplicationCloseOrchestrator
         CancellationToken cancellationToken)
     {
         var failures = ApplicationCloseFailureFlags.None;
+        var installerMaintenance =
+            _intentTracker.Current == ApplicationCloseIntent.InstallerMaintenance;
 
         try
         {
@@ -183,7 +185,10 @@ public sealed class ApplicationCloseOrchestrator
                 {
                     try
                     {
-                        await _restoreRoutesAsync(routingToken);
+                        if (!installerMaintenance)
+                        {
+                            await _restoreRoutesAsync(routingToken);
+                        }
                     }
                     catch (OperationCanceledException)
                     {
@@ -226,6 +231,11 @@ public sealed class ApplicationCloseOrchestrator
         if (failures != ApplicationCloseFailureFlags.None)
         {
             return ApplicationCloseResult.WithoutAuthorization(failures);
+        }
+
+        if (installerMaintenance)
+        {
+            return ApplicationCloseResult.WithoutAuthorization();
         }
 
         if (!UpdateCloseAuthorizationContext.TryCreate(

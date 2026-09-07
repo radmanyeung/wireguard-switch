@@ -47,6 +47,8 @@ public partial class MainWindow : Window
     private bool allowCloseWithoutRestore;
     private bool isWindowClosing;
     private readonly bool runPostInstallSelfTestOnLoad;
+    private readonly InstallStartupHandshake? installStartupHandshake;
+    private readonly EventWaitHandle? installCommitEvent;
     private readonly SemaphoreSlim renewSemaphore = new(1, 1);
     private readonly SemaphoreSlim softwareApplySemaphore = new(1, 1);
     private CancellationTokenSource? softwareReapplyDebounceCts;
@@ -70,9 +72,13 @@ public partial class MainWindow : Window
         IUpdateCloseParticipant? updateCloseParticipant = null,
         WindowsUpdateCompositionRoot? windowsUpdate = null,
         UpdateStartupHealthContext? updateStartupHealthContext =
-            null)
+            null,
+        InstallStartupHandshake? installStartupHandshake = null,
+        EventWaitHandle? installCommitEvent = null)
     {
         this.runPostInstallSelfTestOnLoad = runPostInstallSelfTestOnLoad;
+        this.installStartupHandshake = installStartupHandshake;
+        this.installCommitEvent = installCommitEvent;
         this.windowsUpdate = windowsUpdate;
         this.updateStartupHealthContext =
             updateStartupHealthContext;
@@ -264,6 +270,7 @@ public partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         suppressAutoSoftwareReapply = true;
+        var installCommitted = installStartupHandshake is null;
         try
         {
             logger.Info("Window loaded. Starting initialization.");
@@ -275,6 +282,17 @@ public partial class MainWindow : Window
             TunnelStatusText.Text = isConnected
                 ? $"Tunnel: Connected ({interfaceName})"
                 : "Tunnel: Disconnected";
+
+            if (installStartupHandshake is not null)
+            {
+                installStartupHandshake.WriteReady(
+                    VersionDisplay.FromAssembly(Assembly.GetExecutingAssembly())
+                        .TrimStart('v', 'V'),
+                    Environment.ProcessId,
+                    Environment.ProcessPath ?? AppContext.BaseDirectory);
+                await WaitForInstallCommitAsync();
+                installCommitted = true;
+            }
 
             if (!isConnected && state.AutoEnableTunnel)
             {
@@ -299,12 +317,18 @@ public partial class MainWindow : Window
         {
             logger.Error("Unhandled startup exception.", ex);
             TunnelStatusText.Text = "Tunnel: Startup renew failed";
-            MessageBox.Show(this, $"Startup renew failed: {ex.Message}", "Wireguard Split Tunnel");
+            if (installStartupHandshake is null)
+            {
+                MessageBox.Show(
+                    this,
+                    $"Startup renew failed: {ex.Message}",
+                    "Wireguard Split Tunnel");
+            }
         }
         finally
         {
             suppressAutoSoftwareReapply = false;
-            if (!isWindowClosing)
+            if (installCommitted && !isWindowClosing)
             {
                 dnsCacheLearningTimer.Start();
                 // The WireGuard service outlives the app, so the tunnel may
@@ -315,6 +339,40 @@ public partial class MainWindow : Window
                 // tunneling.
                 ScheduleSoftwareReapply("startup");
             }
+        }
+    }
+
+    private async Task WaitForInstallCommitAsync()
+    {
+        if (installCommitEvent is null)
+        {
+            throw new InvalidOperationException(
+                "The authenticated installer commit event is unavailable.");
+        }
+        var committed = await Task.Run(() =>
+            installCommitEvent.WaitOne(TimeSpan.FromSeconds(90)));
+        if (!committed)
+        {
+            throw new TimeoutException(
+                "The installer did not commit startup within 90 seconds.");
+        }
+        await WaitForInstallTransactionCompletionAsync();
+    }
+
+    private static async Task WaitForInstallTransactionCompletionAsync()
+    {
+        var journalPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "WireguardSplitTunnel.install-transaction.json");
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (File.Exists(journalPath) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(100);
+        }
+        if (File.Exists(journalPath))
+        {
+            throw new TimeoutException(
+                "The installer transaction did not finish within 30 seconds.");
         }
     }
     private void OnNetworkAddressChanged(object? sender, EventArgs e)

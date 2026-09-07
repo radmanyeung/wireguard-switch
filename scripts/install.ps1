@@ -7,7 +7,9 @@ param(
     [switch]$Elevated,
     [switch]$ProtectedInstalledCopy,
     [switch]$ProtectedRepairBootstrap,
-    [string]$LauncherLogPath
+    [string]$LauncherLogPath,
+    [string]$InstallHealthToken,
+    [string]$InstallHealthPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,6 +95,48 @@ function Write-Step {
     param([string]$Message)
     Write-Host "[INSTALL] $Message"
     Write-LauncherLog $Message
+}
+
+function Wait-WgstInstallStartupHealth {
+    param(
+        [Parameter(Mandatory = $true)][string]$HealthPath,
+        [Parameter(Mandatory = $true)][string]$Token,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+        [Parameter(Mandatory = $true)][string]$ExpectedExecutable,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $expectedPath = [IO.Path]::GetFullPath($ExpectedExecutable)
+    do {
+        if (Test-Path -LiteralPath $HealthPath -PathType Leaf) {
+            try {
+                $health = Get-Content -LiteralPath $HealthPath -Raw |
+                    ConvertFrom-Json
+                if ([string]$health.token -cne $Token -or
+                    [string]$health.version -cne $ExpectedVersion -or
+                    -not [bool]$health.settingsLoaded -or
+                    -not [bool]$health.mainWindowInitialized -or
+                    [int]$health.processId -le 0 -or
+                    [IO.Path]::GetFullPath([string]$health.executablePath) -ine
+                        $expectedPath) {
+                    throw 'Installed application returned mismatched startup health data.'
+                }
+                $process = Get-Process -Id ([int]$health.processId) -ErrorAction Stop
+                if ($process.HasExited -or
+                    [IO.Path]::GetFullPath([string]$process.MainModule.FileName) -ine
+                        $expectedPath) {
+                    throw 'Installed application startup process identity is invalid.'
+                }
+                return $process.Id
+            }
+            catch [Management.Automation.ItemNotFoundException] {
+            }
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "Installed application did not report ready within $TimeoutSeconds seconds."
 }
 
 function Test-IsAdministrator {
@@ -386,6 +430,21 @@ function Invoke-WgstBoundBundledReleaseBootstrap {
     $authenticated = Import-WgstAuthenticatedBundleModule `
         -PackageRoot $PackageRoot
     $binding = $authenticated.Binding
+    $bootstrapInstallToken = if ($NoPostInstallSelfTest -or
+        $RepairBlockedUpdate) {
+        $null
+    }
+    else {
+        [Guid]::NewGuid().ToString('N')
+    }
+    $bootstrapInstallHealthPath = if ($null -eq $bootstrapInstallToken) {
+        $null
+    }
+    else {
+        Join-Path ([Environment]::GetFolderPath(
+            [Environment+SpecialFolder]::LocalApplicationData)) (
+            "WireguardSplitTunnel\install-health\$bootstrapInstallToken.json")
+    }
     $payload = [ordered]@{
         packageRoot = [string]$binding.packageRoot
         modulePath = [string]$authenticated.ModulePath
@@ -400,6 +459,8 @@ function Invoke-WgstBoundBundledReleaseBootstrap {
         repairBlockedUpdate = [bool]$RepairBlockedUpdate
         noDesktopShortcut = [bool]$NoDesktopShortcut
         noPostInstallSelfTest = [bool]$NoPostInstallSelfTest
+        installHealthToken = $bootstrapInstallToken
+        installHealthPath = $bootstrapInstallHealthPath
     } | ConvertTo-Json -Compress
     $payloadBase64 = [Convert]::ToBase64String(
         [Text.UTF8Encoding]::new($false).GetBytes($payload))
@@ -502,18 +563,21 @@ $moduleText = [Text.UTF8Encoding]::new($false, $true).GetString(
 $module = New-Module -ScriptBlock ([ScriptBlock]::Create($moduleText))
 Microsoft.PowerShell.Core\Import-Module $module -Force
 $repairBootstrap = [bool]$payload.repairBlockedUpdate
-$installedRoot = & $module {
-    param($Payload, [bool]$RepairBootstrap)
-    Install-WgstAuthenticatedBundledReleaseToProtectedAnchor `
-        -PackageRoot ([string]$Payload.packageRoot) `
-        -ExpectedVolumeSerialNumber ([uint32]$Payload.volumeSerialNumber) `
-        -ExpectedFileIndex ([uint64]$Payload.fileIndex) `
-        -ExpectedManifestLength ([long]$Payload.manifestLength) `
-        -ExpectedManifestSha256 ([string]$Payload.manifestSha256) `
-        -RepairBootstrap:$RepairBootstrap
-} $payload $repairBootstrap
-$installedScript = Join-Path $installedRoot 'scripts\install.ps1'
+$protectedInstallAction = {
+param($ReleaseModule, $Payload, [bool]$RepairBootstrap)
+$installedRoot = $null
 try {
+    $installedRoot = & $ReleaseModule {
+        param($BoundPayload, [bool]$BoundRepairBootstrap)
+        Install-WgstAuthenticatedBundledReleaseToProtectedAnchor `
+            -PackageRoot ([string]$BoundPayload.packageRoot) `
+            -ExpectedVolumeSerialNumber ([uint32]$BoundPayload.volumeSerialNumber) `
+            -ExpectedFileIndex ([uint64]$BoundPayload.fileIndex) `
+            -ExpectedManifestLength ([long]$BoundPayload.manifestLength) `
+            -ExpectedManifestSha256 ([string]$BoundPayload.manifestSha256) `
+            -RepairBootstrap:$BoundRepairBootstrap
+    } $Payload $RepairBootstrap
+    $installedScript = Join-Path $installedRoot 'scripts\install.ps1'
     $childArguments = [ordered]@{
         Elevated = $true
         ProtectedInstalledCopy = $true
@@ -531,17 +595,87 @@ try {
     if ([bool]$payload.noDesktopShortcut) {
         $childArguments.NoDesktopShortcut = $true
     }
-    if ([bool]$payload.noPostInstallSelfTest) {
+    if ([bool]$Payload.noPostInstallSelfTest) {
         $childArguments.NoPostInstallSelfTest = $true
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace(
+            [string]$Payload.installHealthToken)) {
+        $childArguments.InstallHealthToken =
+            [string]$Payload.installHealthToken
+        $childArguments.InstallHealthPath =
+            [string]$Payload.installHealthPath
     }
     & $installedScript @childArguments
     if (-not $?) {
         throw 'Protected installed Release installer failed.'
     }
+    $commitEvent = $null
+    try {
+        if (-not [string]::IsNullOrWhiteSpace(
+                [string]$Payload.installHealthToken)) {
+            $commitEventName =
+                'Local\WireguardSplitTunnel.InstallCommit.' +
+                [string]$Payload.installHealthToken
+            $commitEvent =
+                [Threading.EventWaitHandle]::OpenExisting($commitEventName)
+        }
+        if ($null -ne $commitEvent) {
+            [void]$commitEvent.Set()
+        }
+        if (-not $RepairBootstrap) {
+            & $ReleaseModule {
+                Complete-WgstProtectedInstallReplacement
+            }
+        }
+    }
+    finally {
+        if ($null -ne $commitEvent) {
+            try { $commitEvent.Dispose() } catch { }
+        }
+        if (-not [string]::IsNullOrWhiteSpace(
+                [string]$Payload.installHealthPath) -and
+            (Test-Path -LiteralPath ([string]$Payload.installHealthPath) `
+                -PathType Leaf)) {
+            try {
+                Remove-Item `
+                    -LiteralPath ([string]$Payload.installHealthPath) `
+                    -Force
+            }
+            catch {
+                Write-Warning (
+                    'Installed startup health cleanup failed: ' +
+                    $_.Exception.Message)
+            }
+        }
+    }
+}
+catch {
+    $installedFailure = $_
+    if (-not $RepairBootstrap) {
+        try {
+            $restoredRoot = & $ReleaseModule {
+                Undo-WgstProtectedInstallReplacement
+            }
+            if (-not [string]::IsNullOrWhiteSpace(
+                    [string]$restoredRoot)) {
+                $restoredStart = Join-Path $restoredRoot 'scripts\start.ps1'
+                if (Test-Path -LiteralPath $restoredStart -PathType Leaf) {
+                    & $restoredStart
+                }
+            }
+        }
+        catch {
+            Write-Warning (
+                'Automatic install rollback failed: ' +
+                $_.Exception.Message)
+        }
+    }
+    throw $installedFailure
 }
 finally {
-    if ($repairBootstrap) {
-        & $module {
+    if ($RepairBootstrap -and
+        -not [string]::IsNullOrWhiteSpace([string]$installedRoot)) {
+        & $ReleaseModule {
             param($StagingRoot)
             Remove-WgstProtectedInstallStaging `
                 -InstallRoot (Get-WgstProtectedInstallRoot) `
@@ -549,6 +683,13 @@ finally {
         } $installedRoot
     }
 }
+}
+& $module {
+    param($Action, $ReleaseModule, $BoundPayload, [bool]$RepairBootstrap)
+    Invoke-WgstWithProtectedUpdateMutex `
+        -Action $Action `
+        -ArgumentList @($ReleaseModule, $BoundPayload, $RepairBootstrap)
+} $protectedInstallAction $module $payload $repairBootstrap
 }
 catch {
     # When this runs as the UAC-elevated child, its console window would
@@ -561,6 +702,23 @@ catch {
         $wgstFailure.Exception.Message) -ForegroundColor Red
     if (-not [string]::IsNullOrWhiteSpace($wgstFailure.ScriptStackTrace)) {
         Write-Host $wgstFailure.ScriptStackTrace
+    }
+    try {
+        $failureLog = Join-Path (
+            [Environment]::GetFolderPath(
+                [Environment+SpecialFolder]::LocalApplicationData)) (
+            'WireguardSplitTunnel\logs\install-elevated.log')
+        [void][IO.Directory]::CreateDirectory((Split-Path -Parent $failureLog))
+        $failureDetails = @(
+            "[$([DateTimeOffset]::Now.ToString('o'))] $($wgstFailure.Exception.Message)",
+            [string]$wgstFailure.ScriptStackTrace,
+            [string]::Empty) -join [Environment]::NewLine
+        [IO.File]::AppendAllText(
+            $failureLog,
+            $failureDetails,
+            [Text.UTF8Encoding]::new($false))
+    }
+    catch {
     }
     Write-Host '[INSTALL] Fix the cause above, then run install.cmd again.'
     if ($wgstElevatedChild) {
@@ -580,6 +738,21 @@ catch {
     $childBootstrapSource = $bootstrapSource.Replace(
         '__ELEVATED_CHILD__',
         '$true')
+    foreach ($sourceToValidate in @(
+            $inlineBootstrapSource,
+            $childBootstrapSource)) {
+        $parseTokens = $null
+        $parseErrors = $null
+        [void][Management.Automation.Language.Parser]::ParseInput(
+            $sourceToValidate,
+            [ref]$parseTokens,
+            [ref]$parseErrors)
+        if ($parseErrors.Count -gt 0) {
+            throw (
+                'Generated protected installer bootstrap is invalid: ' +
+                $parseErrors[0].Message)
+        }
+    }
     $encodedCommand = [Convert]::ToBase64String(
         [Text.Encoding]::Unicode.GetBytes($childBootstrapSource))
 
@@ -596,8 +769,8 @@ catch {
             '-NoProfile',
             '-ExecutionPolicy', 'Bypass',
             '-EncodedCommand', $encodedCommand) `
-        -Wait `
         -PassThru
+    $process.WaitForExit()
     if ($process.ExitCode -ne 0) {
         throw (
             "Protected installer failed with exit code $($process.ExitCode). " +
@@ -876,22 +1049,56 @@ if ($installMode -eq 'BundledRelease') {
     Write-Step 'Installed Release security policy validated.'
 }
 
-Write-Step 'Install completed.'
-
 if (-not $NoPostInstallSelfTest) {
-    Write-Step 'Launching app for post-install self test...'
+    Write-Step 'Launching the installed app and waiting for startup verification...'
     $startScript = Join-Path $PSScriptRoot 'start.ps1'
-    $argList = @(
-        '-NoProfile',
-        '-ExecutionPolicy', 'Bypass',
-        '-File', "`"$startScript`"",
-        '-PostInstallSelfTest'
-    )
-    Start-Process `
-        -FilePath (Get-WgstSystemPowerShellPath) `
-        -ArgumentList $argList
+    $installToken = if ([string]::IsNullOrWhiteSpace($InstallHealthToken)) {
+        [Guid]::NewGuid().ToString('N')
+    }
+    else {
+        $InstallHealthToken
+    }
+    if ($installToken -cnotmatch '^[0-9a-f]{32}$') {
+        throw 'Install startup health token is invalid.'
+    }
+    $healthRoot = Join-Path $dataDir 'install-health'
+    New-Item -ItemType Directory -Path $healthRoot -Force | Out-Null
+    $expectedHealthPath = Join-Path $healthRoot "$installToken.json"
+    $healthPath = if ([string]::IsNullOrWhiteSpace($InstallHealthPath)) {
+        $expectedHealthPath
+    }
+    else {
+        [IO.Path]::GetFullPath($InstallHealthPath)
+    }
+    if ($healthPath -ine [IO.Path]::GetFullPath($expectedHealthPath)) {
+        throw 'Install startup health path is invalid.'
+    }
+    $parentControlsHealth =
+        -not [string]::IsNullOrWhiteSpace($InstallHealthToken)
+    if (Test-Path -LiteralPath $healthPath) {
+        Remove-Item -LiteralPath $healthPath -Force
+    }
+    try {
+        & $startScript `
+            -InstallHealthToken $installToken `
+            -InstallHealthPath $healthPath
+        $manifest = Get-Content -LiteralPath $releaseManifest -Raw |
+            ConvertFrom-Json
+        [void](Wait-WgstInstallStartupHealth `
+            -HealthPath $healthPath `
+            -Token $installToken `
+            -ExpectedVersion ([string]$manifest.version) `
+            -ExpectedExecutable $publishedExe)
+        Write-Step 'Installed application startup verified.'
+    }
+    finally {
+        if (-not $parentControlsHealth -and
+            (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $healthPath -Force
+        }
+    }
 }
 
-Write-Step 'Next: app will show self test dialogs. If blocked by UAC, approve prompt.'
+Write-Step 'Install completed.'
 
 
