@@ -28,6 +28,14 @@ public static class IncrementalDomainRouteApplyPlanner
             .ToList();
 
         var snapshot = state.ManagedRouteSnapshot.ToList();
+        foreach (var accepted in acceptedRules)
+        {
+            foreach (var ip in accepted.ResolvedIps)
+            {
+                var debtIndex = snapshot.FindIndex(r => r.IpAddress == ip && r.Domain == SoftwareDomainRouteOwnership.SharedDebtDomain);
+                if (debtIndex >= 0) snapshot[debtIndex] = snapshot[debtIndex] with { Domain = accepted.Rule.Domain };
+            }
+        }
         var snapshotIps = snapshot
             .Select(entry => entry.IpAddress)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

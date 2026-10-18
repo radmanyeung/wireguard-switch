@@ -27,7 +27,9 @@ public sealed record NetworkAdapterSample(
 
 public sealed record NetworkRouteEntry(string Destination, string Netmask, string InterfaceIp, int Metric);
 
-public sealed record NetworkConnection(int ProcessId, IPAddress RemoteAddress, int RemotePort);
+public sealed record NetworkConnection(
+    int ProcessId, IPAddress RemoteAddress, int RemotePort,
+    IPAddress? LocalAddress = null, int LocalPort = 0);
 
 public sealed record NetworkProcessIdentity(int ProcessId, string ProcessName, string? ExecutablePath, string? Warning);
 
@@ -258,6 +260,25 @@ public sealed class NetworkTrafficCalculator
 
 public static class NetworkRouteClassifier
 {
+    public static NetworkPathKind ClassifySource(
+        IPAddress? localAddress, IEnumerable<string> wireGuardAddresses, IEnumerable<string> knownLocalAddresses)
+    {
+        if (localAddress is null || IPAddress.IsLoopback(localAddress)
+            || localAddress.Equals(IPAddress.Any) || localAddress.Equals(IPAddress.IPv6Any))
+        {
+            return NetworkPathKind.Unknown;
+        }
+
+        var source = localAddress.ToString();
+        if (wireGuardAddresses.Contains(source, StringComparer.OrdinalIgnoreCase))
+        {
+            return NetworkPathKind.Vpn;
+        }
+
+        return knownLocalAddresses.Contains(source, StringComparer.OrdinalIgnoreCase)
+            ? NetworkPathKind.Normal : NetworkPathKind.Unknown;
+    }
+
     public static NetworkRouteEntry? FindBestRoute(IPAddress remoteAddress, IEnumerable<NetworkRouteEntry> routes)
     {
         if (remoteAddress.AddressFamily != AddressFamily.InterNetwork)
@@ -389,7 +410,8 @@ public static class NetstatTcpConnectionParser
                 continue;
             }
 
-            connections.Add(new NetworkConnection(pid, address, port));
+            TryParseEndpoint(parts[1], out var localAddress, out var localPort);
+            connections.Add(new NetworkConnection(pid, address, port, localAddress, localPort));
         }
 
         return connections;
@@ -506,7 +528,8 @@ public static class NetworkActivityAggregator
         Func<IPAddress, NetworkPathKind> routeClassifier,
         Func<IPAddress, string> domainResolver,
         DateTimeOffset capturedAt,
-        out IReadOnlyList<string> warnings)
+        out IReadOnlyList<string> warnings,
+        Func<IPAddress?, NetworkPathKind>? sourceClassifier = null)
     {
         var warningSet = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         var rows = connections
@@ -514,7 +537,8 @@ public static class NetworkActivityAggregator
             {
                 connection.ProcessId,
                 RemoteAddress = connection.RemoteAddress.ToString(),
-                connection.RemotePort
+                connection.RemotePort,
+                LocalAddress = connection.LocalAddress?.ToString()
             })
             .Select(group =>
             {
@@ -525,7 +549,9 @@ public static class NetworkActivityAggregator
                     warningSet.Add($"PID {identity.ProcessId} {identity.ProcessName}: {identity.Warning}");
                 }
 
-                var route = routeClassifier(first.RemoteAddress);
+                var route = sourceClassifier is null
+                    ? routeClassifier(first.RemoteAddress)
+                    : sourceClassifier(first.LocalAddress);
                 var domain = domainResolver(first.RemoteAddress);
                 return new NetworkActivityRow(
                     identity.ProcessName,
@@ -535,7 +561,8 @@ public static class NetworkActivityAggregator
                     $"{first.RemoteAddress}:{first.RemotePort}",
                     route,
                     group.Count(),
-                    capturedAt);
+                    capturedAt,
+                    first.LocalAddress?.ToString() ?? "Unknown");
             })
             .OrderBy(row => row.Route == NetworkPathKind.Unknown ? 1 : 0)
             .ThenBy(row => row.ProcessName, StringComparer.OrdinalIgnoreCase)
@@ -589,13 +616,17 @@ public sealed class SystemNetworkMonitorService : INetworkMonitorService
         var wireGuardIps = wireGuardAdapter?.Ipv4Addresses ?? [];
         var quality = await CaptureQualityAsync(wireGuardAdapter, normalAdapter, capturedAt, warnings, cancellationToken);
         var displayNames = await BuildDomainDisplayNamesAsync(connections, matcher, warnings, cancellationToken);
-        var routeClassifier = await BuildRouteClassifierAsync(
-            connections,
-            wireGuardAdapter,
-            wireGuardInterfaceName,
-            wireGuardIps,
-            warnings,
-            cancellationToken);
+        Func<IPAddress, NetworkPathKind> routeClassifier = _ => NetworkPathKind.Unknown;
+        Func<IPAddress?, NetworkPathKind>? sourceClassifier = null;
+        if (OperatingSystem.IsWindows())
+        {
+            sourceClassifier = CreateWindowsSourceClassifier(adapters, wireGuardAdapter);
+        }
+        else
+        {
+            routeClassifier = await BuildRouteClassifierAsync(
+                connections, wireGuardAdapter, wireGuardInterfaceName, wireGuardIps, warnings, cancellationToken);
+        }
 
         var rows = NetworkActivityAggregator.BuildRows(
             connections,
@@ -603,7 +634,8 @@ public sealed class SystemNetworkMonitorService : INetworkMonitorService
             routeClassifier,
             address => displayNames.TryGetValue(address.ToString(), out var display) ? display : address.ToString(),
             capturedAt,
-            out var rowWarnings);
+            out var rowWarnings,
+            sourceClassifier);
 
         warnings.AddRange(rowWarnings);
         return new NetworkMonitorSnapshot(
@@ -789,6 +821,15 @@ public sealed class SystemNetworkMonitorService : INetworkMonitorService
             statistics.BytesSent,
             ipv4,
             gateways);
+    }
+
+    public static Func<IPAddress?, NetworkPathKind> CreateWindowsSourceClassifier(
+        IReadOnlyList<NetworkAdapterSample> adapters, NetworkAdapterSample? selectedWireGuard)
+    {
+        // Other active WireGuard tunnels are neither the selected VPN nor normal traffic.
+        var normalAddresses = BuildNormalAdapterSample(adapters, selectedWireGuard?.Name).Ipv4Addresses;
+        return address => NetworkRouteClassifier.ClassifySource(address,
+            selectedWireGuard?.Ipv4Addresses ?? [], normalAddresses);
     }
 
     private static NetworkAdapterSample? FindWireGuardAdapter(

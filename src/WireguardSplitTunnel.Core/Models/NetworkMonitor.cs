@@ -38,7 +38,8 @@ public sealed record NetworkActivityRow(
     string RemoteEndpoint,
     NetworkPathKind Route,
     int Connections,
-    DateTimeOffset LastSeen);
+    DateTimeOffset LastSeen,
+    string SourceAddress = "Unknown");
 
 public sealed record NetworkMonitorSnapshot(
     DateTimeOffset CapturedAt,

@@ -79,6 +79,8 @@ public static class RuleStateMutations
             LastKnownResolvedIps = resolved,
             ManagedRouteSnapshot = snapshot,
             SoftwareRules = software,
+            SoftwareLearnedDestinations = state.SoftwareLearnedDestinations.Select(entry => entry with { IpAddresses = entry.IpAddresses.ToList() }).ToList(),
+            SoftwareOwnedRoutes = state.SoftwareOwnedRoutes.ToList(),
             LastKnownResolvedIpDetails = details,
             MacTunnelProfiles = state.MacTunnelProfiles.Select(profile => profile with { }).ToList(),
             MacSoftwareRules = state.MacSoftwareRules.Select(rule => rule with { }).ToList(),
@@ -87,7 +89,7 @@ public static class RuleStateMutations
     }
 
     public static AppState CloneForAppliedRollback(AppState currentState, AppState appliedSnapshot) =>
-        Clone(appliedSnapshot) with { AutoUpdateEnabled = currentState.AutoUpdateEnabled };
+        Clone(appliedSnapshot) with { AutoUpdateEnabled = currentState.AutoUpdateEnabled, SoftwareOwnedRoutes = currentState.SoftwareOwnedRoutes.ToList() };
 
     private static string NormalizeDomain(string domain) => domain.Trim().ToLowerInvariant();
 }

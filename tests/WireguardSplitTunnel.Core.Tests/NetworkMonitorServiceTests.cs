@@ -8,6 +8,48 @@ namespace WireguardSplitTunnel.Core.Tests;
 public sealed class NetworkMonitorServiceTests
 {
     [Fact]
+    public void WindowsSourceClassifier_DoesNotLabelAnotherWireGuardTunnelAsNormal()
+    {
+        var selected = new NetworkAdapterSample("GB", "WireGuard Tunnel", 7, true, 0, 0, ["10.5.0.2"]);
+        NetworkAdapterSample[] adapters = [selected,
+            new("US", "WireGuard Tunnel", 9, true, 0, 0, ["10.6.0.2"]),
+            new("Ethernet", "Physical adapter", 12, true, 0, 0, ["192.168.68.61"])];
+        var classify = SystemNetworkMonitorService.CreateWindowsSourceClassifier(adapters, selected);
+
+        classify(IPAddress.Parse("10.6.0.2")).Should().Be(NetworkPathKind.Unknown);
+        classify(IPAddress.Parse("10.5.0.2")).Should().Be(NetworkPathKind.Vpn);
+        classify(IPAddress.Parse("192.168.68.61")).Should().Be(NetworkPathKind.Normal);
+    }
+
+    [Theory]
+    [InlineData("10.5.0.2", NetworkPathKind.Vpn)]
+    [InlineData("192.168.68.61", NetworkPathKind.Normal)]
+    [InlineData("192.168.68.99", NetworkPathKind.Unknown)]
+    [InlineData("0.0.0.0", NetworkPathKind.Unknown)]
+    [InlineData("::1", NetworkPathKind.Unknown)]
+    [InlineData(null, NetworkPathKind.Unknown)]
+    public void SourceClassifier_UsesRecognizedSocketBinding(string? local, NetworkPathKind expected)
+    {
+        NetworkRouteClassifier.ClassifySource(local is null ? null : IPAddress.Parse(local),
+            ["10.5.0.2"], ["10.5.0.2", "192.168.68.61"]).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ActivityAggregator_KeepsMixedSourceSocketsSeparateAfterRouteChanges()
+    {
+        NetworkConnection[] connections = [
+            new(42, IPAddress.Parse("34.160.81.0"), 443, IPAddress.Parse("192.168.68.61"), 50001),
+            new(42, IPAddress.Parse("34.160.81.0"), 443, IPAddress.Parse("10.5.0.2"), 50002)];
+        var rows = NetworkActivityAggregator.BuildRows(connections,
+            pid => new(pid, "ChatGPT.exe", "C:\\ChatGPT.exe", null),
+            _ => NetworkPathKind.Vpn, address => address.ToString(), DateTimeOffset.UtcNow, out _,
+            local => NetworkRouteClassifier.ClassifySource(local, ["10.5.0.2"], ["192.168.68.61", "10.5.0.2"]));
+        rows.Should().HaveCount(2);
+        rows.Should().ContainSingle(row => row.Route == NetworkPathKind.Normal && row.Connections == 1);
+        rows.Should().ContainSingle(row => row.Route == NetworkPathKind.Vpn && row.Connections == 1);
+    }
+
+    [Fact]
     public void TrafficCalculator_FirstSample_ReturnsZeroSpeed()
     {
         var calculator = new NetworkTrafficCalculator();
@@ -87,8 +129,11 @@ public sealed class NetworkMonitorServiceTests
         rows[0].ProcessId.Should().Be(1234);
         rows[0].RemoteAddress.Should().Be(IPAddress.Parse("104.18.32.47"));
         rows[0].RemotePort.Should().Be(443);
+        rows[0].LocalAddress.Should().Be(IPAddress.Parse("192.168.68.22"));
+        rows[0].LocalPort.Should().Be(55123);
         rows[1].ProcessId.Should().Be(5678);
         rows[1].RemoteAddress.Should().Be(IPAddress.Parse("2606:4700::6812:202f"));
+        rows[1].LocalAddress.Should().Be(IPAddress.IPv6Loopback);
     }
 
     [Fact]

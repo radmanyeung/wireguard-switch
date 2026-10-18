@@ -253,10 +253,29 @@ install.cmd -SkipPublish -NoDesktopShortcut
 - Mode `1 = Use WireGuard`:
   - traffic defaults to WireGuard.
 - Mode `2 = Bypass WireGuard` (OR mode):
-  - software in enabled software list (including subprocess) uses WireGuard.
-  - non-software-list traffic: only domain-list traffic uses WireGuard.
-  - other traffic uses normal network.
+  - enabled software rules learn observed public TCP/IPv4 destination addresses
+    and add WireGuard host routes. `Include subprocesses` includes observed
+    descendants, including grandchildren.
+  - Domain Rules continue to add their resolved destination routes.
+  - traffic without a matching destination route uses the normal network.
   - app maintains both `WG /1` and `Bypass /1` routes (dual `/1`) for stability.
+
+Software learning runs every two seconds while the elevated app is open, even
+when Monitor is stopped. The Software Rules page shows learned destination and
+child-process counts. Turn off or remove a rule to release its software-only
+routes; routes still needed by another software or domain rule remain.
+
+This is destination-based routing, not a per-process leak prevention mechanism.
+Other applications connecting to a learned IP also use its VPN route. The first
+connection can precede discovery, short-lived processes may be missed, and UDP
+and IPv6 are not covered. Existing TCP connections can retain their original
+source address; reconnect the affected application to verify new connections.
+VPN-default mode does not support inverse software destination learning.
+
+On Windows, Monitor shows the socket's **Source** address and classifies its
+recognized source interface. It does not relabel an existing physical-source
+connection as VPN merely because a destination route was added. Unknown sources
+remain `Unknown`; source binding is not packet-capture proof of egress.
 
 ## Self-test outputs
 - `Software Self Test` includes:
@@ -265,7 +284,20 @@ install.cmd -SkipPublish -NoDesktopShortcut
   - firewall rule key match (`WGST-Software-*`)
   - effective Mode 2 profile
   - `WG /1 present` and `Bypass /1 present`
-  - routing status `PASS/WARNING/FAIL`
+  - configuration status `PASS/WARNING/FAIL`, learned destinations and owned routes
+  - an explicit reminder that firewall/route presence does not verify packet egress
+
+### Explicit live software-routing acceptance probe
+
+After building `tools/WireguardSplitTunnel.SoftwareRouting.Probe`, run its EXE
+as Administrator with `--live GB <new-evidence-directory>` (replace `GB` with the
+active WireGuard interface). It opens controlled child TCP connections to
+`1.0.0.1:443`, verifies that enabling descendant observation learns the address,
+adds one exact temporary VPN host route, checks the reconnected socket source and
+an HTTPS peer response, then removes only the route it created. An already-routed
+baseline is rejected. Results and cleanup debt stay in the supplied directory.
+It does not restart WireGuard or close application sessions. This probe must be
+run explicitly; ordinary unit tests never modify live routes.
 
 ## Developer run (optional)
 ```powershell

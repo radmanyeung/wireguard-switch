@@ -215,11 +215,16 @@
             <TabItem Header="Software Rules">
                 <Grid Margin="10">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
-                    <DataGrid x:Name="SoftwareRulesGrid"
+                    <StackPanel Grid.Row="0" Margin="0,0,0,10">
+                        <TextBlock Text="Learns public TCP/IPv4 destinations for each enabled app and optional descendants. Host routes affect all apps using the same IP. UDP, IPv6 and the first connection are not covered." TextWrapping="Wrap" />
+                        <TextBlock x:Name="SoftwareLearningStatus" Text="Software destination learning is starting…" TextWrapping="Wrap" Foreground="#475569" Margin="0,5,0,0" />
+                    </StackPanel>
+                    <DataGrid Grid.Row="1" x:Name="SoftwareRulesGrid"
                               AutoGenerateColumns="False"
                               IsReadOnly="True"
                               HeadersVisibility="Column"
@@ -230,11 +235,13 @@
                             <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="*" />
                             <DataGridCheckBoxColumn Header="Enabled" Binding="{Binding Enabled}" Width="90" />
                             <DataGridCheckBoxColumn Header="Subprocess" Binding="{Binding IncludeSubprocesses}" Width="110" />
+                            <DataGridTextColumn Header="Learned IPs" Binding="{Binding LearnedDestinations}" Width="95" />
+                            <DataGridTextColumn Header="Children" Binding="{Binding ChildProcesses}" Width="80" />
                             <DataGridTextColumn Header="Path" Binding="{Binding ShortPath}" Width="2*" />
                         </DataGrid.Columns>
                     </DataGrid>
 
-                    <StackPanel Grid.Row="1"
+                    <StackPanel Grid.Row="2"
                                 Margin="0,12,0,0"
                                 Orientation="Horizontal"
                                 HorizontalAlignment="Right">
@@ -366,7 +373,10 @@
                             <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="150" />
                             <DataGridTextColumn Header="Domain / IP" Binding="{Binding DomainOrAddress}" Width="*" />
                             <DataGridTextColumn Header="Remote" Binding="{Binding RemoteEndpoint}" Width="170" />
-                            <DataGridTextColumn Header="Route" Binding="{Binding Route}" Width="90" />
+                            <DataGridTextColumn Header="Source" Binding="{Binding SourceAddress}" Width="130" />
+                            <DataGridTextColumn Binding="{Binding Route}" Width="90">
+                                <DataGridTextColumn.Header><TextBlock Text="Route" ToolTip="Socket source interface; packet egress is not verified" /></DataGridTextColumn.Header>
+                            </DataGridTextColumn>
                             <DataGridTextColumn Header="Conns" Binding="{Binding Connections}" Width="70" />
                             <DataGridTextColumn Header="Path" Binding="{Binding ShortPath}" Width="220" />
                             <DataGridTextColumn Header="Last Seen" Binding="{Binding LastSeen}" Width="110" />

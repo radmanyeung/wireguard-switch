@@ -27,11 +27,12 @@ public sealed class IncrementalDnsRouteReconciler(IDnsCacheReader dnsCacheReader
         }
 
         var resolutionStateChanged = ResolutionStateUpdater.MergeIncremental(state, plan.LearnedRules);
-        var snapshotChanged = !state.ManagedRouteSnapshot.SequenceEqual(plan.Snapshot);
+        var exactSnapshot = SoftwareDomainRouteOwnership.PreserveMetadata(plan.Snapshot, state.ManagedRouteSnapshot);
+        var snapshotChanged = !state.ManagedRouteSnapshot.SequenceEqual(exactSnapshot);
         if (snapshotChanged)
         {
             state.ManagedRouteSnapshot.Clear();
-            state.ManagedRouteSnapshot.AddRange(plan.Snapshot);
+            state.ManagedRouteSnapshot.AddRange(exactSnapshot);
         }
 
         return new IncrementalDnsRouteReconcileResult(

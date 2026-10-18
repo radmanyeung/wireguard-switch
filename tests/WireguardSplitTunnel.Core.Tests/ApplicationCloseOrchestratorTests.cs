@@ -775,6 +775,35 @@ public sealed class ApplicationCloseOrchestratorTests
         }
     }
 
+    [Fact]
+    public async Task RunOnceAsync_PartialRouteCleanupKeepsJournalAndFinalSaveButCannotAuthorizeUpdate()
+    {
+        var order = new List<string>();
+        var owned = new List<SoftwareOwnedRoute> { new("8.8.8.8", 7, "0.0.0.0", 3), new("1.1.1.1", 7, "0.0.0.0", 3) };
+        List<SoftwareOwnedRoute>? journal = null;
+        var participant = new FakeParticipant(order: order);
+        var actions = new SemaphoreCloseActions(order: order);
+        var reconciler = new SoftwareRouteReconciler(new PartialCleanupWriter());
+        var orchestrator = CreateOrchestrator(participant, actions, NormalCloseTracker(), token =>
+            reconciler.ReconcileAsync([], [], null, owned, () =>
+            {
+                journal = owned.ToList();
+                order.Add("JournalConfirmedRemoval");
+            }, () => true, token));
+        var result = await orchestrator.RunOnceAsync();
+        journal.Should().ContainSingle().Which.IpAddress.Should().Be("1.1.1.1");
+        owned.Should().Equal(journal!);
+        order.IndexOf("JournalConfirmedRemoval").Should().BeLessThan(order.IndexOf("SavePrimaryState"));
+        actions.SaveCount.Should().Be(1);
+        result.Failures.Should().Be(ApplicationCloseFailureFlags.RestoreRoutes);
+        participant.AuthorizationCount.Should().Be(0);
+    }
+    private sealed class PartialCleanupWriter : ISoftwareRouteWriter
+    {
+        public Task<bool> EnsureAsync(SoftwareOwnedRoute route, CancellationToken cancellationToken) => throw new InvalidOperationException("Cleanup must not add routes");
+        public Task DeleteAsync(SoftwareOwnedRoute route, CancellationToken cancellationToken) => route.IpAddress == "1.1.1.1"
+            ? Task.FromException(new IOException("Second route deletion failed")) : Task.CompletedTask;
+    }
     private sealed class FakeDnsCacheReader(IReadOnlyCollection<DnsCacheEntry> entries)
         : IDnsCacheReader
     {

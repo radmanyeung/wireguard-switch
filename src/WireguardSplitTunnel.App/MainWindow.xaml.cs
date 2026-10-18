@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim renewSemaphore = new(1, 1);
     private readonly SemaphoreSlim softwareApplySemaphore = new(1, 1);
     private CancellationTokenSource? softwareReapplyDebounceCts;
+    private readonly object softwareReapplyGate = new();
     private CancellationTokenSource? monitorRefreshCts;
     private readonly CancellationTokenSource dnsCacheLearningCts = new();
     private int softwareApplyInProgress;
@@ -223,7 +224,7 @@ public partial class MainWindow : Window
         closeIntentTracker.ResolveNormalClose();
         NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
         NetworkChange.NetworkAvailabilityChanged -= OnNetworkAvailabilityChanged;
-        softwareReapplyDebounceCts?.Cancel();
+        lock (softwareReapplyGate) softwareReapplyDebounceCts?.Cancel();
         monitorTimer.Stop();
         dnsCacheLearningTimer.Stop();
         dnsCacheLearningCts.Cancel();
@@ -237,6 +238,7 @@ public partial class MainWindow : Window
             // after 20s regardless.
             using var closeTimeoutCts =
                 new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            await StopSoftwareLearningAsync().WaitAsync(closeTimeoutCts.Token);
             var runTask = applicationCloseOrchestrator
                 .RunOnceAsync(closeTimeoutCts.Token);
             var completedTask = await Task.WhenAny(
@@ -331,6 +333,7 @@ public partial class MainWindow : Window
             if (installCommitted && !isWindowClosing)
             {
                 dnsCacheLearningTimer.Start();
+                StartSoftwareLearning();
                 // The WireGuard service outlives the app, so the tunnel may
                 // already be up when the app starts. No network-change event
                 // fires in that case and enabled software rules would never
@@ -590,6 +593,7 @@ public partial class MainWindow : Window
                 row.ProcessName,
                 row.DomainOrAddress,
                 row.RemoteEndpoint,
+                row.SourceAddress ?? "unknown",
                 row.Route.ToString(),
                 row.Connections,
                 ShortenPath(row.ExecutablePath),
@@ -749,9 +753,11 @@ public partial class MainWindow : Window
         logger.Info($"Scheduling software rules re-apply: {reason}");
 
         var nextCts = new CancellationTokenSource();
-        var previous = Interlocked.Exchange(ref softwareReapplyDebounceCts, nextCts);
-        previous?.Cancel();
-        previous?.Dispose();
+        lock (softwareReapplyGate)
+        {
+            softwareReapplyDebounceCts?.Cancel();
+            softwareReapplyDebounceCts = nextCts;
+        }
 
         _ = Task.Run(async () =>
         {
@@ -774,7 +780,7 @@ public partial class MainWindow : Window
                 }
 
                 var op = Dispatcher.InvokeAsync(() =>
-                    ApplySoftwarePoliciesAsync(showMessage: false, triggerReason: $"auto re-apply ({reason})", CancellationToken.None));
+                    ApplySoftwarePoliciesAsync(showMessage: false, triggerReason: $"auto re-apply ({reason})", nextCts.Token));
                 await op.Task.Unwrap();
             }
             catch (OperationCanceledException)
@@ -783,6 +789,14 @@ public partial class MainWindow : Window
             catch (Exception ex)
             {
                 logger.Error($"Auto software rules re-apply failed ({reason}).", ex);
+            }
+            finally
+            {
+                lock (softwareReapplyGate)
+                {
+                    if (ReferenceEquals(softwareReapplyDebounceCts, nextCts)) softwareReapplyDebounceCts = null;
+                    nextCts.Dispose();
+                }
             }
         });
     }
@@ -1495,6 +1509,9 @@ public partial class MainWindow : Window
             .Select(group => group.First())
             .ToList();
 
+        // A domain-created route still needed by software keeps its domain cleanup debt.
+        var softwareNeeded = DesiredSoftwareIps();
+        newSnapshot = SoftwareDomainRouteOwnership.RetainSharedDebt(newSnapshot, state.ManagedRouteSnapshot, softwareNeeded, state.SoftwareOwnedRoutes);
         var newIps = newSnapshot
             .Select(entry => entry.IpAddress)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -1502,14 +1519,15 @@ public partial class MainWindow : Window
 
         // Always re-add current domain IP routes, because external route updates (WireGuard reapply)
         // may remove them without updating our local state snapshot.
-        var toAdd = newIps;
+        var toAdd = newSnapshot.Where(r => r.Domain != SoftwareSharedDomainDebt).Select(r => r.IpAddress).Distinct().ToList();
         var toRemove = previousManagedIps
             .Except(newIps, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         await ApplyRoutesViaCurrentWireGuardAsync(toAdd, toRemove, CancellationToken.None);
-        await HealMissingDomainRoutesAsync(newIps, CancellationToken.None);
+        await HealMissingDomainRoutesAsync(toAdd, CancellationToken.None);
 
+        newSnapshot = SoftwareDomainRouteOwnership.PreserveMetadata(newSnapshot, state.ManagedRouteSnapshot);
         ResolutionStateUpdater.Apply(state, resolvedRules);
         state = state with { ManagedRouteSnapshot = newSnapshot };
 
@@ -1619,7 +1637,53 @@ public partial class MainWindow : Window
 
             try
             {
-                await routeService.ApplyAsync(currentWireGuardInterfaceName, toAdd, toRemove, cancellationToken);
+                var protectedIps = DesiredSoftwareIps();
+                protectedIps.UnionWith(state.SoftwareOwnedRoutes.Select(r => r.IpAddress));
+                protectedIps.UnionWith(state.ManagedRouteSnapshot.Where(r => r.Domain == SoftwareSharedDomainDebt).Select(r => r.IpAddress));
+                var additions = toAdd.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                var shared = additions.Where(protectedIps.Contains).ToArray();
+                if (shared.Length > 0)
+                {
+                    var targetInterface = state.SoftwareGlobalDefaultMode == DomainRouteMode.BypassWireGuard
+                        ? SelectedSoftwareInterface() : FindNetworkInterface(currentWireGuardInterfaceName);
+                    var index = targetInterface?.GetIPProperties().GetIPv4Properties()?.Index
+                        ?? throw new InvalidOperationException("WireGuard interface does not expose an IPv4 interface index");
+                    foreach (var ip in shared)
+                    {
+                        var owned = new SoftwareOwnedRoute(ip, index, "0.0.0.0", 3);
+                        if (await softwareRouteWriter.EnsureAsync(owned, cancellationToken) && !state.SoftwareOwnedRoutes.Contains(owned))
+                        { state.SoftwareOwnedRoutes.Add(owned); stateStore.Save(state); }
+                        if (!state.ManagedRouteSnapshot.Any(r => r.IpAddress == ip) && state.SoftwareOwnedRoutes.Contains(owned))
+                        {
+                            state.ManagedRouteSnapshot.Add(new("__domain_pending__", ip, targetInterface!.Name, index, owned.NextHop, owned.Metric));
+                            stateStore.Save(state);
+                        }
+                    }
+                }
+                foreach (var ip in toRemove)
+                {
+                    var recorded = state.ManagedRouteSnapshot.FirstOrDefault(r => r.IpAddress == ip);
+                    if (recorded is null || !SoftwareDomainRouteOwnership.CanRemoveDomainRoute(recorded, DesiredSoftwareIps(), state.SoftwareOwnedRoutes)) continue;
+                    if (recorded?.InterfaceIndex is int oldIndex && recorded.NextHop is string oldHop && recorded.RouteMetric is int oldMetric)
+                        await softwareRouteWriter.DeleteAsync(new(ip, oldIndex, oldHop, oldMetric), cancellationToken);
+                    else
+                        await routeService.ApplyAsync(currentWireGuardInterfaceName, [], [ip], cancellationToken);
+                }
+                foreach (var ip in additions.Where(ip => !protectedIps.Contains(ip)))
+                {
+                    var actualIndex = FindNetworkInterface(currentWireGuardInterfaceName)?.GetIPProperties().GetIPv4Properties()?.Index
+                        ?? throw new InvalidOperationException("WireGuard interface does not expose an IPv4 interface index");
+                    await routeService.ApplyAsync(currentWireGuardInterfaceName, [ip], [], cancellationToken);
+                    if (FindNetworkInterface(currentWireGuardInterfaceName)?.GetIPProperties().GetIPv4Properties()?.Index != actualIndex)
+                        throw new InvalidOperationException("WireGuard interface changed during domain route installation");
+                    var exact = await softwareRouteWriter.ReadExactAsync(new(ip, actualIndex, "0.0.0.0", 3), cancellationToken)
+                        ?? throw new InvalidOperationException("Domain route could not be confirmed on its installation interface");
+                    var existing = state.ManagedRouteSnapshot.FindIndex(r => r.IpAddress == ip);
+                    var metadata = new ManagedRouteEntry(existing >= 0 ? state.ManagedRouteSnapshot[existing].Domain : "__domain_pending__",
+                        ip, currentWireGuardInterfaceName, exact.InterfaceIndex, exact.NextHop, exact.Metric);
+                    if (existing >= 0) state.ManagedRouteSnapshot[existing] = metadata; else state.ManagedRouteSnapshot.Add(metadata);
+                    stateStore.Save(state);
+                }
                 return;
             }
             catch (InvalidOperationException ex) when (IsTransientWireGuardInterfaceError(ex))
@@ -1665,30 +1729,36 @@ public partial class MainWindow : Window
             return;
         }
 
+        var softwareOwnedBeforeCleanup = state.SoftwareOwnedRoutes.ToArray();
+        await CleanupSoftwareRoutesOnExitAsync();
         if (!detector.TryGetActiveInterface(out var wireguardInterfaceName))
         {
             logger.Info("Restore on exit skipped: WireGuard interface not detected.");
             return;
         }
 
-        var managedIps = state.ManagedRouteSnapshot
-            .Select(entry => entry.IpAddress)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (managedIps.Count > 0)
+        state.ManagedRouteSnapshot.RemoveAll(r => softwareOwnedBeforeCleanup.Any(s => s.IpAddress == r.IpAddress
+            && s.InterfaceIndex == r.InterfaceIndex && s.NextHop == r.NextHop && s.Metric == r.RouteMetric));
+        for (var i = 0; i < state.ManagedRouteSnapshot.Count; i++)
         {
-            await routeService.ApplyAsync(
-                wireguardInterfaceName,
-                Array.Empty<string>(),
-                managedIps,
-                CancellationToken.None);
+            var entry = state.ManagedRouteSnapshot[i];
+            if (entry.InterfaceIndex is null && softwareOwnedBeforeCleanup.Any(s => s.IpAddress == entry.IpAddress))
+                state.ManagedRouteSnapshot[i] = entry with { Domain = SoftwareSharedDomainDebt };
         }
-
+        var managedIps = state.ManagedRouteSnapshot.Where(r => r.Domain != SoftwareSharedDomainDebt).Select(r => r.IpAddress).Distinct().ToList();
+        foreach (var entry in state.ManagedRouteSnapshot.Where(r => r.Domain != SoftwareSharedDomainDebt).ToArray())
+        {
+            if (entry.InterfaceIndex is int oldIndex && entry.NextHop is string oldHop && entry.RouteMetric is int oldMetric)
+                await softwareRouteWriter.DeleteAsync(new(entry.IpAddress, oldIndex, oldHop, oldMetric), CancellationToken.None);
+            else
+                await routeService.ApplyAsync(wireguardInterfaceName, [], [entry.IpAddress], CancellationToken.None);
+            state.ManagedRouteSnapshot.Remove(entry);
+            stateStore.Save(state);
+        }
         await RemoveWireGuardDnsHostRoutesAsync(wireguardInterfaceName, CancellationToken.None);
         logger.Info("Restore on exit: skipping forced WireGuard full-tunnel /1 routes.");
 
-        state = state with { ManagedRouteSnapshot = [] };
+        stateStore.Save(state); // Unverifiable legacy shared-route debt is deliberately retained.
 
         logger.Info($"Restore on exit completed. Removed managed routes: {managedIps.Count}");
     }
@@ -2163,7 +2233,7 @@ public partial class MainWindow : Window
         }
 
         var expectedMatchCount = Math.Max(0, enabledRules.Count - missingPathCount);
-        var selfTestStatus = RoutingStatus.Pass;
+        var selfTestStatus = RoutingStatus.Warning; // Firewall rule presence cannot prove packet egress.
         if (firewallQueryError is not null || missingPathCount > 0 || firewallMatchedCount < expectedMatchCount)
         {
             selfTestStatus = RoutingStatus.Fail;
@@ -2189,7 +2259,9 @@ public partial class MainWindow : Window
         sb.AppendLine($"Default via WireGuard now: {(defaultViaWireGuard ? "YES" : "NO")}");
         sb.AppendLine($"WG /1 present: {(hasWireGuardHalfDefaults ? "YES" : "NO")}");
         sb.AppendLine($"Bypass /1 present: {(hasBypassHalfDefaults ? "YES" : "NO")}");
-        sb.AppendLine($"Routing status: {selfTestStatus.ToString().ToUpperInvariant()}");
+        sb.AppendLine($"Configuration status: {selfTestStatus.ToString().ToUpperInvariant()}");
+        sb.AppendLine($"Learned public TCP/IPv4 destinations: {DesiredSoftwareIps().Count}; owned host routes: {state.SoftwareOwnedRoutes.Count}");
+        sb.AppendLine("Packet egress: NOT VERIFIED by firewall names or route presence. Destination routes affect every process; UDP, IPv6 and the first connection are not covered.");
         if (routingCompatibility.Status != RoutingStatus.Pass)
         {
             sb.AppendLine($"Routing note: {routingCompatibility.Reason}");
@@ -2401,7 +2473,8 @@ public partial class MainWindow : Window
 
             SoftwareSelfTestButton.IsEnabled = false;
 
-            if (!detector.TryGetActiveInterface(out var wireguardInterfaceName))
+            var selectedSoftwareInterface = SelectedSoftwareInterface();
+            if (selectedSoftwareInterface is null)
             {
                 if (showMessage)
                 {
@@ -2412,6 +2485,7 @@ public partial class MainWindow : Window
                 return;
             }
 
+            var wireguardInterfaceName = selectedSoftwareInterface.Name;
             var repairResult = SoftwareRulePathRepair.RepairEnabledRulePaths(state, softwareExecutableLocator);
 
             stateStore.Save(state);
@@ -2452,7 +2526,7 @@ public partial class MainWindow : Window
                 : $"\nUnresolved path skipped ({repairResult.UnresolvedProcessNames.Count}): {string.Join(", ", repairResult.UnresolvedProcessNames.Distinct(StringComparer.OrdinalIgnoreCase))}";
             var verificationText = $"\nVerification: {verification.Detail}";
             var routingText = routingCompatibility.Status == RoutingStatus.Pass
-                ? "\nRouting: PASS"
+                ? "\nRouting configuration: PASS (packet egress not verified)"
                 : $"\nRouting: WARNING ({routingCompatibility.Reason})";
 
             if (showMessage)
@@ -2513,18 +2587,22 @@ public partial class MainWindow : Window
 
     private void RefreshSoftwareGrid()
     {
+        var selected = SoftwareRulesGrid.SelectedItem as SoftwareRow;
         var rows = (state.SoftwareRules ?? [])
             .Select(rule => new SoftwareRow(
                 rule.ProcessName,
                 rule.Enabled,
                 rule.IncludeSubprocesses,
                 rule.ExecutablePath,
-                ShortenPath(rule.ExecutablePath)))
+                ShortenPath(rule.ExecutablePath),
+                state.SoftwareLearnedDestinations.FirstOrDefault(l => l.Fingerprint == SoftwareRoutePlanner.Fingerprint(rule))?.IpAddresses.Count ?? 0,
+                softwareChildCounts.GetValueOrDefault(SoftwareRoutePlanner.Fingerprint(rule))))
             .OrderBy(row => row.ProcessName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.ExecutablePath, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         SoftwareRulesGrid.ItemsSource = rows;
+        if (selected is not null) SoftwareRulesGrid.SelectedItem = rows.FirstOrDefault(r => r.ProcessName == selected.ProcessName && r.ExecutablePath == selected.ExecutablePath);
     }
 
     private List<string> BuildRelatedDomainCandidates(string domainInput)
@@ -3152,11 +3230,12 @@ public partial class MainWindow : Window
     private sealed record DefaultRouteEntry(string Destination, string Netmask, string Gateway, string InterfaceIp, int Metric);
     private sealed record Ipv4RouteEntry(string Destination, string Netmask, string Gateway, string InterfaceIp, int Metric);
     private sealed record DomainRow(string Domain, bool Enabled, int ResolvedIpCount);
-    private sealed record SoftwareRow(string ProcessName, bool Enabled, bool IncludeSubprocesses, string? ExecutablePath, string ShortPath);
+    private sealed record SoftwareRow(string ProcessName, bool Enabled, bool IncludeSubprocesses, string? ExecutablePath, string ShortPath, int LearnedDestinations, int ChildProcesses);
     private sealed record MonitorActivityDisplayRow(
         string ProcessName,
         string DomainOrAddress,
         string RemoteEndpoint,
+        string SourceAddress,
         string Route,
         int Connections,
         string ShortPath,

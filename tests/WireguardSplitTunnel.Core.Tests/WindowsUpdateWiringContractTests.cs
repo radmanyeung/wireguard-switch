@@ -137,7 +137,17 @@ public sealed class WindowsUpdateWiringContractTests
             "private async Task RemoveWireGuardDnsHostRoutesAsync");
         restore.Should().Contain(
             "if (!state.RestoreNormalRoutingOnExit)");
-        restore.Should().NotContain("stateStore.Save(state);");
+        // Route deletion is irreversible. Journal each confirmed removal while both
+        // routing gates are held; the orchestrator still performs the final save and
+        // authorizes updates only after restore and that final save succeed.
+        var confirmedDelete = restore.IndexOf("await softwareRouteWriter.DeleteAsync(", StringComparison.Ordinal);
+        var retireDebt = restore.IndexOf("state.ManagedRouteSnapshot.Remove(entry);", StringComparison.Ordinal);
+        confirmedDelete.Should().BeGreaterThanOrEqualTo(0);
+        retireDebt.Should().BeGreaterThan(confirmedDelete);
+        restore.IndexOf("stateStore.Save(state);", retireDebt, StringComparison.Ordinal).Should().BeGreaterThan(retireDebt);
+        restore.Should().Contain("r.Domain != SoftwareSharedDomainDebt");
+        closing.IndexOf("await StopSoftwareLearningAsync().WaitAsync(closeTimeoutCts.Token);", StringComparison.Ordinal)
+            .Should().BeLessThan(closing.IndexOf(".RunOnceAsync(", StringComparison.Ordinal));
         closing.Should().NotContain("stateStore.Save(state);");
         source.Should().Contain(
             "() => stateStore.Save(state)");

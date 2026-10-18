@@ -1,3 +1,4 @@
+using WireguardSplitTunnel.Core.Services;
 namespace WireguardSplitTunnel.Core.Models;
 
 public sealed record AppState(
@@ -27,8 +28,13 @@ public sealed record AppState(
     bool AutoUpdateEnabled = true,
     // Extra user-added folders scanned for .conf / .conf.dpapi files, on top
     // of the platform defaults in WireguardConfigCatalog.
-    List<string>? CustomConfigDirectories = null)
+    List<string>? CustomConfigDirectories = null,
+    List<SoftwareLearnedDestinations>? SoftwareLearnedDestinations = null,
+    List<SoftwareOwnedRoute>? SoftwareOwnedRoutes = null)
 {
+    public List<SoftwareLearnedDestinations> SoftwareLearnedDestinations { get; init; } = SoftwareLearnedDestinations ?? [];
+    public List<SoftwareOwnedRoute> SoftwareOwnedRoutes { get; init; } = SoftwareOwnedRoutes ?? [];
+
     public Dictionary<string, List<ResolvedIpDetail>> LastKnownResolvedIpDetails { get; init; } =
         LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(StringComparer.OrdinalIgnoreCase);
 
@@ -45,7 +51,10 @@ public sealed record AppState(
 public sealed record ManagedRouteEntry(
     string Domain,
     string IpAddress,
-    string? InterfaceName = null);
+    string? InterfaceName = null,
+    int? InterfaceIndex = null,
+    string? NextHop = null,
+    int? RouteMetric = null);
 
 public sealed record MacDnsServiceSnapshot(
     string ServiceName,

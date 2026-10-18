@@ -108,7 +108,7 @@ public sealed class SystemSoftwareExecutableLocator : ISoftwareExecutableLocator
         }
 
         var paths = new List<string?>();
-        foreach (var process in Process.GetProcesses())
+        foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(exeName)))
         {
             using (process)
             {
