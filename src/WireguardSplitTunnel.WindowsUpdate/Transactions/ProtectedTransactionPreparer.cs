@@ -1451,7 +1451,7 @@ internal sealed class WindowsProtectedTransactionPreparationWorkspace
         using var transactionsResult =
             acl.EnsureProtectedDirectoryTree(
                 layout.ProductRoot,
-                ["transactions"]);
+                [ProtectedTransactionPaths.TransactionsDirectoryName]);
         if (!transactionsResult.Success
             || transactionsResult.Lease
                 is not { } transactionsRoot

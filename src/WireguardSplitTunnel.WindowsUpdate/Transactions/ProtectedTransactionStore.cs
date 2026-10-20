@@ -202,6 +202,13 @@ internal enum ProtectedTransactionFileState
     Unsafe
 }
 
+internal enum ProtectedTransactionDirectoryState
+{
+    Missing,
+    Protected,
+    Unsafe
+}
+
 internal enum ProtectedAtomicCommitResult
 {
     Committed,
@@ -226,6 +233,11 @@ internal interface IProtectedFileSnapshotLease : IDisposable
 internal interface IProtectedTransactionFileSystem
 {
     bool ValidateProtectedDirectory(string path);
+
+    ProtectedTransactionDirectoryState InspectProtectedDirectory(string path) =>
+        ValidateProtectedDirectory(path)
+            ? ProtectedTransactionDirectoryState.Protected
+            : ProtectedTransactionDirectoryState.Unsafe;
 
     ProtectedTransactionFileState InspectProtectedFile(
         string path);
@@ -771,7 +783,7 @@ public sealed class ProtectedTransactionStore
     private ProtectedActiveTransactionReadResult ReadActiveCore(
         ProtectedUpdateMutexContext authority)
     {
-        using var snapshot = ReadActiveSnapshot(authority);
+        using var snapshot = ReadActiveSnapshot(authority, allowMissingRoots: true);
         return snapshot.Success
             ? ProtectedActiveTransactionReadResult.Found(
                 snapshot.TransactionId)
@@ -780,7 +792,8 @@ public sealed class ProtectedTransactionStore
     }
 
     private ActivePointerSnapshot ReadActiveSnapshot(
-        ProtectedUpdateMutexContext authority)
+        ProtectedUpdateMutexContext authority,
+        bool allowMissingRoots = false)
     {
         var rootResult = _paths.GetRoot();
         if (!rootResult.Success
@@ -791,7 +804,26 @@ public sealed class ProtectedTransactionStore
         }
 
         var root = rootResult.Layout;
-        if (!ValidateRootDirectoryChain(root))
+        if (allowMissingRoots)
+        {
+            // First-run reads may observe an absent root. Inspect ancestors in
+            // order so an unsafe existing product root cannot hide behind a
+            // missing child. Mutation callers still require the entire chain.
+            foreach (var directory in new[] { root.ProductRoot, root.TransactionsRoot })
+            {
+                var directoryState = _fileSystem.InspectProtectedDirectory(directory);
+                if (directoryState == ProtectedTransactionDirectoryState.Missing)
+                {
+                    return ActivePointerSnapshot.Found(transactionId: null, snapshot: null);
+                }
+
+                if (directoryState != ProtectedTransactionDirectoryState.Protected)
+                {
+                    return ActivePointerSnapshot.Failed(ProtectedTransactionStoreError.AclMismatch);
+                }
+            }
+        }
+        else if (!ValidateRootDirectoryChain(root))
         {
             return ActivePointerSnapshot.Failed(
                 ProtectedTransactionStoreError.AclMismatch);
@@ -928,11 +960,10 @@ public sealed class ProtectedTransactionStore
         }
 
         var inactiveBytes = SerializeInactivePointer();
-        var written = WriteProtectedFile(
+        var written = WriteActivePointer(
             layoutResult.Layout.ActivePointerPath,
             inactiveBytes,
-            active.Bytes,
-            active.Identity);
+            active);
         if (!written.Success)
         {
             return written;
@@ -1145,11 +1176,10 @@ public sealed class ProtectedTransactionStore
         }
 
         var inactiveBytes = SerializeInactivePointer();
-        var written = WriteProtectedFile(
+        var written = WriteActivePointer(
             rootResult.Layout.ActivePointerPath,
             inactiveBytes,
-            active.Bytes,
-            active.Identity);
+            active);
         if (!written.Success)
         {
             return written;
@@ -1370,11 +1400,10 @@ public sealed class ProtectedTransactionStore
                 ProtectedTransactionStoreError.InvalidData);
         }
 
-        return WriteProtectedFile(
+        return WriteActivePointer(
             layoutResult.Layout.ActivePointerPath,
             pointerBytes,
-            active.Bytes,
-            active.Identity);
+            active);
     }
 
     private static bool IsAllowedProtectedReplacement(
@@ -2600,6 +2629,28 @@ public sealed class ProtectedTransactionStore
             ? ProtectedTransactionStoreResult.Completed()
             : ProtectedTransactionStoreResult.Failed(
                 ProtectedTransactionStoreError.VerificationFailed);
+    }
+
+    private ProtectedTransactionStoreResult WriteActivePointer(
+        string destinationPath,
+        byte[] replacementBytes,
+        ActivePointerSnapshot active)
+    {
+        var expectedBytes = active.Bytes;
+        var expectedIdentity = active.Identity;
+        if (!active.Revalidate())
+        {
+            return ProtectedTransactionStoreResult.Failed(
+                ProtectedTransactionStoreError.Conflict);
+        }
+
+        // Windows read snapshots deny delete sharing. Release this destination
+        // pin before the atomic writer opens/replaces it. The caller retains its
+        // authority and mutation leases; the writer pins the protected parent
+        // and compares the captured file identity and bytes before committing.
+        active.Dispose();
+        return WriteProtectedFile(destinationPath, replacementBytes,
+            expectedBytes, expectedIdentity);
     }
 
     private ProtectedTransactionStoreResult WriteProtectedFile(
@@ -4291,13 +4342,22 @@ internal sealed class WindowsProtectedTransactionFileSystem
             ?? throw new ArgumentNullException(nameof(acl));
     }
 
-    public bool ValidateProtectedDirectory(string path)
+    public bool ValidateProtectedDirectory(string path) =>
+        InspectProtectedDirectory(path) == ProtectedTransactionDirectoryState.Protected;
+
+    public ProtectedTransactionDirectoryState InspectProtectedDirectory(string path)
     {
         using var opened = _acl.InspectProtectedDirectory(
             path,
             ProtectedDirectoryInspectionPolicy.Transaction);
-        return opened.Success
-            && opened.Lease?.Revalidate() == true;
+        if (opened.Success && opened.Lease?.Revalidate() == true)
+        {
+            return ProtectedTransactionDirectoryState.Protected;
+        }
+
+        return opened.Error == ProtectedAclError.Missing
+            ? ProtectedTransactionDirectoryState.Missing
+            : ProtectedTransactionDirectoryState.Unsafe;
     }
 
     public ProtectedTransactionFileState InspectProtectedFile(

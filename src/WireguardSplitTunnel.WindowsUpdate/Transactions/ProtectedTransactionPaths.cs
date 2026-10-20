@@ -124,7 +124,7 @@ public readonly record struct ProtectedTransactionResolvedPathResult(
 public sealed class ProtectedTransactionPaths
 {
     private const string ProductDirectoryName = "WireguardSplitTunnel";
-    private const string TransactionsDirectoryName = "UpdateTransactions";
+    internal const string TransactionsDirectoryName = "UpdateTransactions";
     private const string ActivePointerFileName = "active-transaction.json";
     private const string TransactionFileName = "transaction.json";
     private const string JournalFileName = "journal.json";

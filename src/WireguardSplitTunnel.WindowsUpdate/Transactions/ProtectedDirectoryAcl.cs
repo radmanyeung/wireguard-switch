@@ -893,7 +893,7 @@ public sealed class ProtectedDirectoryAcl
             {
                 if (!set.Revalidate())
                 {
-                    set.CleanupCreatedDirectories(_native);
+                    set.CleanupCreatedDirectories(this);
                     return ProtectedDirectoryLeaseOpenResult.Failed(
                         ProtectedAclError.UnsafePath);
                 }
@@ -914,7 +914,7 @@ public sealed class ProtectedDirectoryAcl
                     privilege ??= _acquireRestorePrivilege();
                     if (privilege is null)
                     {
-                        set.CleanupCreatedDirectories(_native);
+                        set.CleanupCreatedDirectories(this);
                         return ProtectedDirectoryLeaseOpenResult.Failed(
                             ProtectedAclError.PrivilegeUnavailable);
                     }
@@ -931,25 +931,9 @@ public sealed class ProtectedDirectoryAcl
 
                 if (!child.Success || child.Handle is null)
                 {
-                    set.CleanupCreatedDirectories(_native);
+                    set.CleanupCreatedDirectories(this);
                     return ProtectedDirectoryLeaseOpenResult.Failed(
                         child.Error);
-                }
-
-                if (created)
-                {
-                    var flushed = _native.FlushDirectory(
-                        currentHandle);
-                    if (!flushed.Success)
-                    {
-                        _native.Delete(
-                            child.Handle,
-                            directory: true);
-                        child.Handle.Dispose();
-                        set.CleanupCreatedDirectories(_native);
-                        return ProtectedDirectoryLeaseOpenResult.Failed(
-                            flushed.Error);
-                    }
                 }
 
                 currentPath = Path.GetFullPath(
@@ -962,7 +946,7 @@ public sealed class ProtectedDirectoryAcl
                         out var snapshot))
                 {
                     child.Handle.Dispose();
-                    set.CleanupCreatedDirectories(_native);
+                    set.CleanupCreatedDirectories(this);
                     return ProtectedDirectoryLeaseOpenResult.Failed(
                         ProtectedAclError.UnsafePath);
                 }
@@ -972,9 +956,21 @@ public sealed class ProtectedDirectoryAcl
                             snapshot.SecurityDescriptor,
                             directory: true))
                 {
-                    set.CleanupCreatedDirectories(_native);
+                    set.CleanupCreatedDirectories(this);
                     return ProtectedDirectoryLeaseOpenResult.Failed(
                         ProtectedAclError.SecurityMismatch);
+                }
+
+                if (created)
+                {
+                    var flushed = _native.FlushDirectory(
+                        currentHandle);
+                    if (!flushed.Success)
+                    {
+                        set.CleanupCreatedDirectories(this);
+                        return ProtectedDirectoryLeaseOpenResult.Failed(
+                            flushed.Error);
+                    }
                 }
 
                 currentHandle = child.Handle;
@@ -985,7 +981,7 @@ public sealed class ProtectedDirectoryAcl
                     set,
                     ProtectedDirectoryInspectionPolicy.Transaction))
             {
-                set.CleanupCreatedDirectories(_native);
+                set.CleanupCreatedDirectories(this);
                 return ProtectedDirectoryLeaseOpenResult.Failed(
                     ProtectedAclError.UnsafePath);
             }
@@ -1008,7 +1004,7 @@ public sealed class ProtectedDirectoryAcl
             IsAccessFailure(exception)
             || IsIoFailure(exception))
         {
-            set?.CleanupCreatedDirectories(_native);
+            set?.CleanupCreatedDirectories(this);
             return ProtectedDirectoryLeaseOpenResult.Failed(
                 IsAccessFailure(exception)
                     ? ProtectedAclError.AccessDenied
@@ -1625,18 +1621,10 @@ public sealed class ProtectedDirectoryAcl
             }
 
             renamed = true;
-            using var verification = OpenProtectedFileForRead(
-                parent.Lease,
-                leafName,
-                ProtectedDirectoryInspectionPolicy.Transaction);
-            if (!verification.Success
-                || verification.Lease is null
-                || verification.Lease.Identity
-                    != temporary.Snapshot.Identity
-                || !verification.Lease.TryReadAllBytes(
-                    replacementBytes.Length,
-                    out var actual)
-                || !actual.AsSpan().SequenceEqual(
+            if (!VerifyRenamedTemporary(
+                    parent.Lease,
+                    temporary,
+                    canonicalPath,
                     replacementBytes.Span))
             {
                 return ProtectedFileMutationResult.Failed(
@@ -1760,6 +1748,15 @@ public sealed class ProtectedDirectoryAcl
                 return ProtectedFileCompareExchangeResult.Conflict();
             }
 
+            // Replacement cannot coexist with destination no-share-delete pins.
+            // Release only these after the final identity/ACL/byte comparison.
+            // The protected parent excludes unprivileged writers; the update
+            // mutex serializes authorized writes. Ancestors and temp stay pinned.
+            destinationStream.Dispose();
+            destinationStream = null;
+            destination.Dispose();
+            destination = null;
+
             if (!parent.Lease.Revalidate())
             {
                 return ProtectedFileCompareExchangeResult.Failed(
@@ -1783,18 +1780,10 @@ public sealed class ProtectedDirectoryAcl
             }
 
             renamed = true;
-            using var verification = OpenProtectedFileForRead(
-                parent.Lease,
-                leafName,
-                ProtectedDirectoryInspectionPolicy.Transaction);
-            if (!verification.Success
-                || verification.Lease is null
-                || verification.Lease.Identity
-                    != temporary.Snapshot.Identity
-                || !verification.Lease.TryReadAllBytes(
-                    replacementBytes.Length,
-                    out var actual)
-                || !actual.AsSpan().SequenceEqual(
+            if (!VerifyRenamedTemporary(
+                    parent.Lease,
+                    temporary,
+                    canonicalPath,
                     replacementBytes.Span))
             {
                 return ProtectedFileCompareExchangeResult.Failed(
@@ -1828,6 +1817,42 @@ public sealed class ProtectedDirectoryAcl
 
                 temporary.Handle.Dispose();
             }
+        }
+    }
+
+    private static bool VerifyRenamedTemporary(
+        ProtectedDirectoryInspectionLease parent,
+        ProtectedWrittenTemp temporary,
+        string canonicalPath,
+        ReadOnlySpan<byte> expectedBytes)
+    {
+        bool Revalidate() =>
+            parent.Revalidate()
+            && TryReadValidSnapshot(
+                temporary.Handle,
+                canonicalPath,
+                ProtectedAclNativeObjectKind.File,
+                temporary.Snapshot.Identity,
+                out var snapshot)
+            && ProtectedDirectoryInspectionPolicy.Transaction
+                .IsValidDescendant(snapshot.SecurityDescriptor, directory: false);
+
+        try
+        {
+            if (!Revalidate())
+            {
+                return false;
+            }
+
+            // Duplicate the retained handle's stream. Reopening by name would
+            // conflict with this WRITE/DELETE handle's no-share-delete pin.
+            using var stream = temporary.Handle.OpenFileStream(FileAccess.Read);
+            return TryReadExactBytes(stream, expectedBytes) && Revalidate();
+        }
+        catch (Exception exception) when (
+            IsAccessFailure(exception) || IsIoFailure(exception))
+        {
+            return false;
         }
     }
 
@@ -2700,7 +2725,7 @@ public sealed class ProtectedDirectoryAcl
                     out _));
 
         public void CleanupCreatedDirectories(
-            IProtectedAclNativeFileSystem native)
+            ProtectedDirectoryAcl acl)
         {
             for (var index = _entries.Count - 1;
                  index >= 0;
@@ -2714,8 +2739,18 @@ public sealed class ProtectedDirectoryAcl
                     continue;
                 }
 
-                native.Delete(entry.Handle, directory: true);
+                // Keep all ancestors pinned. Release only this created target
+                // before reopening it with DELETE access, bound to the identity
+                // observed while it was still protected by its original pin.
+                var valid = Revalidate();
+                _entries.RemoveAt(index);
                 entry.Handle.Dispose();
+                if (valid && Revalidate())
+                {
+                    acl.DeleteProtectedDirectory(
+                        entry.ExpectedPath,
+                        entry.Snapshot.Identity);
+                }
             }
         }
 
@@ -3369,7 +3404,7 @@ internal sealed class WindowsProtectedAclNativeFileSystem
     private const int DirectoryNameLengthOffset = 60;
     private const int DirectoryNameOffset = 104;
     private const int FileDispositionInfo = 4;
-    private const int FileRenameInfoEx = 22;
+    private const int FileRenameInformationEx = 65;
     private const int FileIdBothDirectoryInformation = 37;
     private const int StatusBufferOverflow =
         unchecked((int)0x80000005);
@@ -3445,6 +3480,37 @@ internal sealed class WindowsProtectedAclNativeFileSystem
         return desiredAccess;
     }
 
+    internal static uint GetRelativeDesiredAccess(
+        ProtectedAclNativeOpenRequest request)
+    {
+        var desiredAccess = request.Disposition
+                == ProtectedAclNativeDisposition.CreateNew
+            ? ((uint)FileSystemRights.FullControl
+                & (request.Kind == ProtectedAclNativeObjectKind.Directory
+                    ? ~DeleteAccess
+                    : uint.MaxValue)) | Synchronize
+            : ReadControl
+                | Synchronize
+                | FileReadAttributes
+                | (request.Kind
+                    == ProtectedAclNativeObjectKind.Directory
+                    ? FileListDirectory | FileTraverse
+                    : GenericRead);
+        if (request.RequireDeleteAccess)
+        {
+            desiredAccess |= DeleteAccess;
+        }
+
+        if (request.RequireWriteAccess)
+        {
+            desiredAccess |= FileWriteData
+                | FileAddSubdirectory
+                | FileDeleteChild;
+        }
+
+        return desiredAccess;
+    }
+
     public ProtectedAclNativeOpenResult OpenRelative(
         IProtectedAclNativeHandle parent,
         string name,
@@ -3488,28 +3554,7 @@ internal sealed class WindowsProtectedAclNativeFileSystem
                 SecurityDescriptor = descriptorPointer,
                 SecurityQualityOfService = IntPtr.Zero
             };
-            var desiredAccess = request.Disposition
-                    == ProtectedAclNativeDisposition.CreateNew
-                ? (uint)FileSystemRights.FullControl
-                    | Synchronize
-                : ReadControl
-                    | Synchronize
-                    | FileReadAttributes
-                    | (request.Kind
-                        == ProtectedAclNativeObjectKind.Directory
-                        ? FileListDirectory | FileTraverse
-                        : GenericRead);
-            if (request.RequireDeleteAccess)
-            {
-                desiredAccess |= DeleteAccess;
-            }
-
-            if (request.RequireWriteAccess)
-            {
-                desiredAccess |= FileWriteData
-                    | FileAddSubdirectory
-                    | FileDeleteChild;
-            }
+            var desiredAccess = GetRelativeDesiredAccess(request);
 
             var createOptions = FileSynchronousIoNonAlert
                 | NativeFileOpenReparsePoint
@@ -3530,7 +3575,9 @@ internal sealed class WindowsProtectedAclNativeFileSystem
                 out _,
                 IntPtr.Zero,
                 fileAttributes: 0,
-                FileShareRead,
+                request.Kind == ProtectedAclNativeObjectKind.Directory
+                    ? FileShareRead | FileShareWrite
+                    : FileShareRead,
                 request.Disposition
                     == ProtectedAclNativeDisposition.CreateNew
                     ? FileCreate
@@ -3755,8 +3802,9 @@ internal sealed class WindowsProtectedAclNativeFileSystem
             var rootOffset = IntPtr.Size;
             var lengthOffset = rootOffset + IntPtr.Size;
             var nameOffset = lengthOffset + sizeof(uint);
-            var bufferSize = checked(
-                nameOffset + nameBytes.Length + sizeof(char));
+            var structureSize = (nameOffset + sizeof(char) + IntPtr.Size - 1)
+                & ~(IntPtr.Size - 1);
+            var bufferSize = checked(structureSize + nameBytes.Length);
             buffer = Marshal.AllocHGlobal(bufferSize);
             for (var index = 0; index < bufferSize; index++)
             {
@@ -3783,14 +3831,19 @@ internal sealed class WindowsProtectedAclNativeFileSystem
                 startIndex: 0,
                 IntPtr.Add(buffer, nameOffset),
                 nameBytes.Length);
-            if (!SetFileInformationByHandle(
+            // The native information class supports a pinned, handle-relative
+            // target. The Win32 FileRenameInfoEx wrapper rejects this form on
+            // supported Windows hosts. Class 65 retains normal access checks.
+            var renameStatus = NtSetInformationFile(
                     sourceHandle.DangerousGetHandle(),
-                    FileRenameInfoEx,
+                    out _,
                     buffer,
-                    unchecked((uint)bufferSize)))
+                    unchecked((uint)bufferSize),
+                    FileRenameInformationEx);
+            if (renameStatus < 0)
             {
                 return ProtectedAclNativeOperationResult.Failed(
-                    MapWin32Error(Marshal.GetLastWin32Error()));
+                    MapNtStatus(renameStatus));
             }
 
             var flushStatus = NtFlushBuffersFile(
@@ -4099,13 +4152,13 @@ internal sealed class WindowsProtectedAclNativeFileSystem
         IntPtr fileHandle,
         out IoStatusBlock ioStatusBlock);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetFileInformationByHandle(
+    [DllImport("ntdll.dll")]
+    private static extern int NtSetInformationFile(
         IntPtr fileHandle,
-        int fileInformationClass,
+        out IoStatusBlock ioStatusBlock,
         IntPtr fileInformation,
-        uint bufferSize);
+        uint bufferSize,
+        int fileInformationClass);
 
     [DllImport(
         "kernel32.dll",

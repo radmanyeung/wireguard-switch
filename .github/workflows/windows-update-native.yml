@@ -1,0 +1,55 @@
+name: windows-update-native
+
+on:
+  push:
+    branches:
+      - main
+      - codex/protected-update-first-run
+    paths:
+      - 'src/WireguardSplitTunnel.WindowsUpdate/**'
+      - 'tests/WireguardSplitTunnel.WindowsUpdate.Tests/**'
+      - '.github/workflows/windows-update-native.yml'
+  pull_request:
+    paths:
+      - 'src/WireguardSplitTunnel.WindowsUpdate/**'
+      - 'tests/WireguardSplitTunnel.WindowsUpdate.Tests/**'
+      - '.github/workflows/windows-update-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-filesystem:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Test native protected staging and transaction files
+        shell: pwsh
+        env:
+          WGST_RUN_PRIVILEGED_NATIVE_TESTS: '1'
+        run: >-
+          dotnet test
+          ./tests/WireguardSplitTunnel.WindowsUpdate.Tests/WireguardSplitTunnel.WindowsUpdate.Tests.csproj
+          -c Release
+          --filter "FullyQualifiedName~ProtectedFirstUpdateNativeTests|FullyQualifiedName~NativeActivePointerTests"
+          --logger "trx;LogFileName=native-windows.trx"
+          --results-directory ./artifacts/native-test-results
+
+      - name: Retain native test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-windows-test-results
+          path: ./artifacts/native-test-results
+          if-no-files-found: warn

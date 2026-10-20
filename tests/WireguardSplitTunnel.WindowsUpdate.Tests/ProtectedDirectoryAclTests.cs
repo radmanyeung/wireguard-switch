@@ -7,6 +7,142 @@ namespace WireguardSplitTunnel.WindowsUpdate.Tests;
 
 public sealed class ProtectedDirectoryAclTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AtomicFileMutation_VerifiesRenamedFileWithoutReopeningPinnedWriteDeleteHandle(bool compareExchange)
+    {
+        using var native = new InterleavingProtectedAclNative(@"C:\safe\protected")
+        {
+            EnforceFileSharing = true,
+            DisableNamespaceSwap = true
+        };
+        var acl = new ProtectedDirectoryAcl(native, _ => DriveType.Fixed);
+        if (compareExchange)
+        {
+            var identity = native.AddProtectedFile("state.json", [1, 2]);
+            acl.CompareExchangeProtectedFile(
+                @"C:\safe\protected\state.json", identity,
+                new byte[] { 1, 2 }, new byte[] { 3, 4 }).Outcome.Should().Be(
+                    ProtectedFileCompareExchangeOutcome.Committed);
+        }
+        else
+        {
+            acl.CreateProtectedFileIfAbsent(
+                @"C:\safe\protected\state.json", new byte[] { 3, 4 }).Outcome.Should().Be(
+                    ProtectedFileMutationOutcome.Committed);
+        }
+
+        native.ReadProtectedFile("state.json").Should().Equal(3, 4);
+        native.Events.LastIndexOf("open-read").Should().BeGreaterThan(native.Events.IndexOf("rename"));
+        native.Requests.Should().OnlyContain(request => !request.ShareDelete);
+    }
+
+    [Fact]
+    public void EnsureProtectedDirectoryTree_CreatedDirectoryCanBeReopenedWhileItsLeaseIsPinned()
+    {
+        using var native = new InterleavingProtectedAclNative(@"C:\safe\protected")
+        {
+            EnforceDirectorySharing = true,
+            DisableNamespaceSwap = true
+        };
+        var acl = new ProtectedDirectoryAcl(native, _ => DriveType.Fixed);
+        using var created = acl.EnsureProtectedDirectoryTree(@"C:\safe\protected", ["new"]);
+        created.Success.Should().BeTrue();
+
+        using var reopened = acl.InspectProtectedDirectory(
+            @"C:\safe\protected\new", ProtectedDirectoryInspectionPolicy.Transaction);
+
+        reopened.Success.Should().BeTrue();
+        created.Lease!.Revalidate().Should().BeTrue();
+        native.Requests.Should().OnlyContain(request => !request.ShareDelete);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AtomicFileMutation_WhenRetainedContentChangesAfterRename_FailsWithoutDeletingPublishedFile(bool compareExchange)
+    {
+        using var native = new InterleavingProtectedAclNative(@"C:\safe\protected")
+        {
+            EnforceFileSharing = true,
+            DisableNamespaceSwap = true,
+            RewriteContentAfterRename = [9, 9]
+        };
+        var acl = new ProtectedDirectoryAcl(native, _ => DriveType.Fixed);
+        if (compareExchange)
+        {
+            var identity = native.AddProtectedFile("state.json", [1, 2]);
+            var result = acl.CompareExchangeProtectedFile(
+                @"C:\safe\protected\state.json", identity,
+                new byte[] { 1, 2 }, new byte[] { 3, 4 });
+            result.Outcome.Should().Be(ProtectedFileCompareExchangeOutcome.Failed);
+            result.Error.Should().Be(ProtectedAclError.UnsafePath);
+        }
+        else
+        {
+            var result = acl.CreateProtectedFileIfAbsent(
+                @"C:\safe\protected\state.json", new byte[] { 3, 4 });
+            result.Outcome.Should().Be(ProtectedFileMutationOutcome.Failed);
+            result.Error.Should().Be(ProtectedAclError.UnsafePath);
+        }
+
+        native.ReadProtectedFile("state.json").Should().Equal(9, 9);
+        native.DeletedPaths.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void EnsureProtectedDirectoryTree_WhenCreationFlushFails_RemovesOnlyCreatedDirectories(int failFlushNumber)
+    {
+        using var native = new InterleavingProtectedAclNative(@"C:\safe\protected")
+        {
+            EnforceDirectorySharing = true,
+            DisableNamespaceSwap = true,
+            FailDirectoryFlushNumber = failFlushNumber
+        };
+        native.AddProtectedFile("keep.txt", [1, 2, 3]);
+        var acl = new ProtectedDirectoryAcl(native, _ => DriveType.Fixed);
+
+        using var created = acl.EnsureProtectedDirectoryTree(@"C:\safe\protected", ["new", "nested"]);
+
+        created.Success.Should().BeFalse();
+        created.Error.Should().Be(ProtectedAclError.IoFailure);
+        native.ContainsProtectedEntry("new").Should().BeFalse();
+        native.ReadProtectedFile("keep.txt").Should().Equal(1, 2, 3);
+        native.DeletedPaths.Should().OnlyContain(path =>
+            path == @"C:\safe\protected\new" || path == @"C:\safe\protected\new\nested");
+        native.Requests.Should().OnlyContain(request => !request.ShareDelete);
+    }
+
+    [Fact]
+    public void EnsureProtectedDirectoryTree_WhenCleanupTargetIsReplaced_DoesNotDeleteReplacement()
+    {
+        using var native = new InterleavingProtectedAclNative(@"C:\safe\protected")
+        {
+            EnforceDirectorySharing = true,
+            DisableNamespaceSwap = true,
+            FailDirectoryFlushNumber = 1
+        };
+        var replacementAttempted = false;
+        native.BeforeDeleteOpen = name =>
+        {
+            name.Should().Be("new");
+            native.ProtectedParentIsPinned.Should().BeTrue();
+            native.TryReplaceProtectedDirectory(name).Should().BeTrue();
+            replacementAttempted = true;
+        };
+        var acl = new ProtectedDirectoryAcl(native, _ => DriveType.Fixed);
+
+        using var created = acl.EnsureProtectedDirectoryTree(@"C:\safe\protected", ["new"]);
+
+        created.Success.Should().BeFalse();
+        replacementAttempted.Should().BeTrue();
+        native.ContainsProtectedEntry("new").Should().BeTrue();
+        native.DeletedPaths.Should().BeEmpty();
+    }
+
     private static readonly SecurityIdentifier Administrators =
         new(WellKnownSidType.BuiltinAdministratorsSid, null);
 
@@ -804,7 +940,7 @@ public sealed class ProtectedDirectoryAclTests
     }
 
     [Fact]
-    public void ProtectedFileMutation_KeepsNoDeleteShareDestinationPinnedThroughRename()
+    public void ProtectedFileMutation_ReleasesOnlyDestinationPinsAfterValidationBeforeRename()
     {
         using var native = new InterleavingProtectedAclNative(
             @"C:\safe\protected");
@@ -814,6 +950,19 @@ public sealed class ProtectedDirectoryAclTests
         var acl = new ProtectedDirectoryAcl(
             native,
             _ => DriveType.Fixed);
+        var destinationReleased = false;
+        native.AfterFileHandleDispose = name =>
+        {
+            if (name != "state.json" || destinationReleased)
+            {
+                return;
+            }
+
+            destinationReleased = true;
+            native.ProtectedParentIsPinned.Should().BeTrue();
+            native.TrySwapProtectedNamespace().Should().BeFalse();
+            native.HasPinnedTemporaryFile.Should().BeTrue();
+        };
 
         var committed = acl.CompareExchangeProtectedFile(
             @"C:\safe\protected\state.json",
@@ -827,7 +976,29 @@ public sealed class ProtectedDirectoryAclTests
         var firstDestinationDispose = native.Events.IndexOf(
             "dispose:state.json");
         rename.Should().BeGreaterThanOrEqualTo(0);
-        firstDestinationDispose.Should().BeGreaterThan(rename);
+        destinationReleased.Should().BeTrue();
+        firstDestinationDispose.Should().BeLessThan(rename);
+        native.Requests.Should().OnlyContain(request => !request.ShareDelete);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProtectedFileMutation_StaleIdentityOrBytesNeverReachesRename(bool staleIdentity)
+    {
+        using var native = new InterleavingProtectedAclNative(@"C:\safe\protected");
+        var identity = native.AddProtectedFile("state.json", [1, 2]);
+        var acl = new ProtectedDirectoryAcl(native, _ => DriveType.Fixed);
+
+        var result = acl.CompareExchangeProtectedFile(
+            @"C:\safe\protected\state.json",
+            staleIdentity ? identity with { FileIdLow = identity.FileIdLow + 1 } : identity,
+            staleIdentity ? new byte[] { 1, 2 } : new byte[] { 9, 9 },
+            new byte[] { 3, 4 });
+
+        result.Outcome.Should().Be(ProtectedFileCompareExchangeOutcome.Conflict);
+        native.Events.Should().NotContain("rename");
+        native.ReadProtectedFile("state.json").Should().Equal(1, 2);
     }
 
     [Fact]
@@ -1122,6 +1293,37 @@ public sealed class ProtectedDirectoryAclTests
         }
 
         public List<ProtectedAclNativeOpenRequest> Requests { get; } = [];
+        public bool EnforceDirectorySharing { get; set; }
+        public bool EnforceFileSharing { get; set; }
+        public byte[]? RewriteContentAfterRename { get; set; }
+        public bool DisableNamespaceSwap { get; set; }
+        public int FailDirectoryFlushNumber { get; set; }
+        private int _directoryFlushCount;
+        public List<string> DeletedPaths { get; } = [];
+        public Action<string>? BeforeDeleteOpen { get; set; }
+        public bool ProtectedParentIsPinned => _protectedParent.NoDeleteShareHandleCount > 0;
+        public Action<string>? AfterFileHandleDispose { get; set; }
+        public bool HasPinnedTemporaryFile => _protectedParent.Children.Values.Any(node =>
+            node.Name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+            && node.NoDeleteShareHandleCount > 0);
+
+        public bool TryReplaceProtectedDirectory(string name)
+        {
+            var existing = _protectedParent.Children[name];
+            if (existing.NoDeleteShareHandleCount != 0)
+            {
+                return false;
+            }
+
+            var replacement = CreateNode(
+                existing.Snapshot.FinalPath,
+                isDirectory: true,
+                existing.Snapshot.SecurityDescriptor);
+            replacement.Parent = _protectedParent;
+            replacement.Name = name;
+            _protectedParent.Children[name] = replacement;
+            return true;
+        }
         public bool FailNextDirectoryFlush { get; set; }
         public bool NamespaceSwapTriggered { get; private set; }
         public bool FailNextMissingOpenWithIo { get; set; }
@@ -1342,7 +1544,10 @@ public sealed class ProtectedDirectoryAclTests
             if (request.Disposition
                 == ProtectedAclNativeDisposition.CreateNew)
             {
-                SwapProtectedNamespace();
+                if (!DisableNamespaceSwap)
+                {
+                    SwapProtectedNamespace();
+                }
                 CreatedParentIdentity =
                     fakeParent.Node.Snapshot.Identity;
                 CreatedOutsidePinnedParent =
@@ -1374,7 +1579,14 @@ public sealed class ProtectedDirectoryAclTests
                     new FakeHandle(
                         child,
                         Events,
-                        request.ShareDelete));
+                        request.ShareDelete,
+                        HasDeleteAccess(request),
+                        child.Snapshot.IsDirectory ? null : AfterFileHandleDispose));
+            }
+
+            if (request.RequireDeleteAccess)
+            {
+                BeforeDeleteOpen?.Invoke(name);
             }
 
             if (!fakeParent.Node.Children.TryGetValue(
@@ -1400,12 +1612,31 @@ public sealed class ProtectedDirectoryAclTests
                     ProtectedAclError.UnsafePath);
             }
 
+            if (EnforceDirectorySharing && existing.Snapshot.IsDirectory
+                && ((!request.ShareDelete && existing.DeleteAccessHandleCount != 0)
+                    || (HasDeleteAccess(request) && existing.NoDeleteShareHandleCount != 0)))
+            {
+                return ProtectedAclNativeOpenResult.Failed(ProtectedAclError.IoFailure);
+            }
+
+            if (EnforceFileSharing && !existing.Snapshot.IsDirectory
+                && !request.ShareDelete && existing.DeleteAccessHandleCount != 0)
+            {
+                return ProtectedAclNativeOpenResult.Failed(ProtectedAclError.IoFailure);
+            }
+
             return ProtectedAclNativeOpenResult.Opened(
                 new FakeHandle(
                     existing,
                     Events,
-                    request.ShareDelete));
+                    request.ShareDelete,
+                    HasDeleteAccess(request),
+                    existing.Snapshot.IsDirectory ? null : AfterFileHandleDispose));
         }
+
+        private static bool HasDeleteAccess(ProtectedAclNativeOpenRequest request) =>
+            (WindowsProtectedAclNativeFileSystem.GetRelativeDesiredAccess(request)
+                & (uint)FileSystemRights.Delete) != 0;
 
 
         public ProtectedAclNativeEnumerationResult EnumerateRelative(
@@ -1459,6 +1690,11 @@ public sealed class ProtectedDirectoryAclTests
                         ProtectedAclError.AlreadyExists);
                 }
 
+                if (existing.NoDeleteShareHandleCount != 0)
+                {
+                    return ProtectedAclNativeOperationResult.Failed(ProtectedAclError.IoFailure);
+                }
+
                 existing.DeleteBackingFile();
                 existing.Deleted = true;
                 destination.Children.Remove(destinationName);
@@ -1472,6 +1708,10 @@ public sealed class ProtectedDirectoryAclTests
                     destination.Snapshot.FinalPath,
                     destinationName));
             destination.Children.Add(destinationName, sourceNode);
+            if (RewriteContentAfterRename is not null)
+            {
+                sourceNode.WriteContent(RewriteContentAfterRename);
+            }
             Events.Add("flush-directory");
             if (FailNextDirectoryFlush)
             {
@@ -1489,7 +1729,12 @@ public sealed class ProtectedDirectoryAclTests
             bool directory)
         {
             Events.Add("delete");
-            var node = ((FakeHandle)target).Node;
+            var handle = (FakeHandle)target;
+            var node = handle.Node;
+            if (!handle.HasDeleteAccess)
+            {
+                return ProtectedAclNativeOperationResult.Failed(ProtectedAclError.AccessDenied);
+            }
             if (node.Deleted
                 || node.Snapshot.IsDirectory != directory
                 || directory && node.Children.Count != 0)
@@ -1499,6 +1744,7 @@ public sealed class ProtectedDirectoryAclTests
             }
 
             node.Parent?.Children.Remove(node.Name);
+            DeletedPaths.Add(node.Snapshot.FinalPath);
             node.Deleted = true;
             node.DeleteBackingFile();
             return ProtectedAclNativeOperationResult.Committed();
@@ -1508,7 +1754,8 @@ public sealed class ProtectedDirectoryAclTests
             IProtectedAclNativeHandle directory)
         {
             Events.Add("flush-directory");
-            if (FailNextDirectoryFlush)
+            _directoryFlushCount++;
+            if (FailNextDirectoryFlush || _directoryFlushCount == FailDirectoryFlushNumber)
             {
                 FailNextDirectoryFlush = false;
                 return ProtectedAclNativeOperationResult.Failed(
@@ -1632,6 +1879,7 @@ public sealed class ProtectedDirectoryAclTests
             public string Name { get; set; } = string.Empty;
             public bool Deleted { get; set; }
             public int NoDeleteShareHandleCount { get; set; }
+            public int DeleteAccessHandleCount { get; set; }
 
             public void SetFinalPath(string finalPath)
             {
@@ -1701,15 +1949,24 @@ public sealed class ProtectedDirectoryAclTests
             private bool _disposed;
             private readonly List<string> _events;
             private readonly bool _shareDelete;
+            private readonly Action<string>? _afterDispose;
 
             public FakeHandle(
                 FakeNode node,
                 List<string> events,
-                bool shareDelete)
+                bool shareDelete,
+                bool hasDeleteAccess = false,
+                Action<string>? afterDispose = null)
             {
                 Node = node;
                 _events = events;
                 _shareDelete = shareDelete;
+                _afterDispose = afterDispose;
+                HasDeleteAccess = hasDeleteAccess;
+                if (hasDeleteAccess)
+                {
+                    Node.DeleteAccessHandleCount++;
+                }
                 if (!shareDelete)
                 {
                     Node.NoDeleteShareHandleCount++;
@@ -1717,6 +1974,7 @@ public sealed class ProtectedDirectoryAclTests
             }
 
             public FakeNode Node { get; }
+            public bool HasDeleteAccess { get; }
 
             public ProtectedAclNativeSnapshot ReadSnapshot()
             {
@@ -1749,13 +2007,7 @@ public sealed class ProtectedDirectoryAclTests
                 }
 
                 _events.Add("open-read");
-                return new FileStream(
-                    Node.GetBackingPath(),
-                    FileMode.Open,
-                    access,
-                    FileShare.ReadWrite | FileShare.Delete,
-                    bufferSize: 4096,
-                    FileOptions.None);
+                return new PinnedReadStream(Node);
             }
 
             public void Dispose()
@@ -1766,11 +2018,40 @@ public sealed class ProtectedDirectoryAclTests
                 }
 
                 _disposed = true;
+                if (HasDeleteAccess)
+                {
+                    Node.DeleteAccessHandleCount--;
+                }
                 if (!_shareDelete)
                 {
                     Node.NoDeleteShareHandleCount--;
                 }
                 _events.Add($"dispose:{Node.Name}");
+                _afterDispose?.Invoke(Node.Name);
+            }
+        }
+
+        private sealed class PinnedReadStream : FileStream
+        {
+            private readonly FakeNode _node;
+            private bool _disposed;
+
+            public PinnedReadStream(FakeNode node)
+                : base(node.GetBackingPath(), FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete)
+            {
+                _node = node;
+                _node.NoDeleteShareHandleCount++;
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (!_disposed)
+                {
+                    _disposed = true;
+                    _node.NoDeleteShareHandleCount--;
+                }
+                base.Dispose(disposing);
             }
         }
 

@@ -4467,6 +4467,8 @@ public sealed partial class ProtectedTransactionStoreTests
         private readonly HashSet<string> _unsafeFiles =
             new(StringComparer.OrdinalIgnoreCase);
         private long _nextIdentity;
+        private readonly Dictionary<string, int> _snapshotPins =
+            new(StringComparer.OrdinalIgnoreCase);
 
         public List<string> Operations { get; } = [];
         public bool FailAtomicMove { get; set; }
@@ -4598,6 +4600,10 @@ public sealed partial class ProtectedTransactionStoreTests
             }
 
             AfterProtectedRead?.Invoke(path);
+            lock (_stateGate)
+            {
+                _snapshotPins[path] = _snapshotPins.GetValueOrDefault(path) + 1;
+            }
             return new FakeProtectedFileSnapshotLease(
                 this,
                 path,
@@ -4668,6 +4674,13 @@ public sealed partial class ProtectedTransactionStoreTests
                 byte[] expectedDestinationBytes,
                 byte[] replacementBytes)
         {
+            lock (_stateGate)
+            {
+                // Real Windows snapshots deny FILE_SHARE_DELETE. Replacing a
+                // destination while its read snapshot is held must fail.
+                if (_snapshotPins.GetValueOrDefault(destinationPath) > 0)
+                    return ProtectedAtomicCommitResult.Failed;
+            }
             var temporaryPath =
                 $"{destinationPath}.{Guid.NewGuid():N}.tmp";
             RecordOperation($"create:{temporaryPath}");
@@ -4966,6 +4979,7 @@ public sealed partial class ProtectedTransactionStoreTests
             : IProtectedFileSnapshotLease
         {
             private readonly byte[] _bytes = bytes.ToArray();
+            private int _disposed;
 
             public ProtectedFileIdentity128 Identity { get; } =
                 identity;
@@ -4980,6 +4994,11 @@ public sealed partial class ProtectedTransactionStoreTests
 
             public void Dispose()
             {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+                lock (owner._stateGate)
+                {
+                    owner._snapshotPins[path]--;
+                }
             }
         }
 
