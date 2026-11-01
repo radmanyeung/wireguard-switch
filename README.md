@@ -274,7 +274,8 @@ VPN-default mode does not support inverse software destination learning.
 
 ### Closing the Windows app and using WireGuard directly
 
-The v0.2.13 exit-routing repair adds cleanup tracking for the physical default
+The [v0.2.13 release](https://github.com/radmanyeung/wireguard-switch/releases/tag/v0.2.13)
+exit-routing repair adds cleanup tracking for the physical default
 route and bypass `/1` pair. Installing this repair preserves the saved rules and
 does not change the original WireGuard configuration.
 
