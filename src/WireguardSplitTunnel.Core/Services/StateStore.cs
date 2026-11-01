@@ -114,6 +114,7 @@ public sealed class StateStore
             DomainRules = state.DomainRules ?? [],
             LastKnownResolvedIps = state.LastKnownResolvedIps ?? new Dictionary<string, List<string>>(),
             ManagedRouteSnapshot = state.ManagedRouteSnapshot ?? [],
+            BypassRouteChanges = state.BypassRouteChanges ?? [],
             LastKnownResolvedIpDetails = state.LastKnownResolvedIpDetails ?? new Dictionary<string, List<ResolvedIpDetail>>(),
             SoftwareRules = state.SoftwareRules ?? [],
             MacTunnelProfiles = state.MacTunnelProfiles ?? [],

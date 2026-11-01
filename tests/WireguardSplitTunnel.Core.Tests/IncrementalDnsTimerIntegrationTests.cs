@@ -22,9 +22,9 @@ public sealed class IncrementalDnsTimerIntegrationTests
         source.Should().Contain(
             "await incrementalDnsRouteReconciler.ReconcileAsync(");
         source.Should().Contain(
-            "await ApplyRoutesViaCurrentWireGuardAsync(toAdd, [], CancellationToken.None);");
+            "await ApplyRoutesViaCurrentWireGuardAsync(toAdd, [], token);");
         source.Should().Contain(
-            "await HealMissingDomainRoutesAsync(toAdd.ToList(), CancellationToken.None);");
+            "await HealMissingDomainRoutesAsync(toAdd.ToList(), token);");
         source.Should().Contain(
             "if (!result.StateChanged && !incrementalDomainStateSavePending)");
 

@@ -272,6 +272,43 @@ and IPv6 are not covered. Existing TCP connections can retain their original
 source address; reconnect the affected application to verify new connections.
 VPN-default mode does not support inverse software destination learning.
 
+### Closing the Windows app and using WireGuard directly
+
+The v0.2.13 exit-routing repair adds cleanup tracking for the physical default
+route and bypass `/1` pair. Installing this repair preserves the saved rules and
+does not change the original WireGuard configuration.
+
+Enable **Restore normal routing when app exits** if WireGuard should regain
+control after this app closes. On a normal close, the app releases its physical
+network bypass `/1` routes and restores the previous physical default-route
+metric. Cleanup also runs when the WireGuard adapter has already disconnected.
+Closing the app first cancels startup DNS renewal and pending software work,
+then waits for their routing locks before restoring routes. This also covers
+closing the window immediately after launch while DNS resolution is still busy.
+An upgrade migrates the complete pair of metric-5 bypass `/1` routes left by
+older versions on the normal gateway. Rules and settings stay saved for the
+next app launch. With restoration disabled, split-tunnel routes remain active.
+
+After the app finishes closing, activating a full-tunnel configuration in
+WireGuard can take over internet routing again. A configuration that contains
+only selected `AllowedIPs` remains split-tunnel; closing this app does not
+change your original `.conf` file. A crash or forced termination can defer
+cleanup until the next app session.
+
+For applications such as Antigravity that check location during startup or
+sign-in, the software list alone cannot guarantee that the first request uses
+the VPN. The learner covers observed TCP/IPv4 destinations and descendants;
+it does not cover IPv6, UDP, or a separate browser's sign-in requests. For a
+full-tunnel check, close this app with restoration enabled, activate your
+full-tunnel WireGuard configuration, then completely restart Antigravity and
+retry. A country-related message alone does not prove a routing failure;
+confirm the application's new socket source and the exact error.
+Google also checks the country associated with the account; a VPN connection
+does not guarantee account eligibility. Check the
+[official Antigravity FAQ](https://antigravity.google/docs/faq#what-is-google-antigravitys-geographical-availability)
+and the country shown on Google's Terms of Service page if the same location
+message persists with a verified full-tunnel connection.
+
 On Windows, Monitor shows the socket's **Source** address and classifies its
 recognized source interface. It does not relabel an existing physical-source
 connection as VPN merely because a destination route was added. Unknown sources

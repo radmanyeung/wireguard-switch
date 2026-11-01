@@ -78,6 +78,7 @@ public static class RuleStateMutations
             DomainRules = rules,
             LastKnownResolvedIps = resolved,
             ManagedRouteSnapshot = snapshot,
+            BypassRouteChanges = state.BypassRouteChanges.ToList(),
             SoftwareRules = software,
             SoftwareLearnedDestinations = state.SoftwareLearnedDestinations.Select(entry => entry with { IpAddresses = entry.IpAddresses.ToList() }).ToList(),
             SoftwareOwnedRoutes = state.SoftwareOwnedRoutes.ToList(),
@@ -89,7 +90,13 @@ public static class RuleStateMutations
     }
 
     public static AppState CloneForAppliedRollback(AppState currentState, AppState appliedSnapshot) =>
-        Clone(appliedSnapshot) with { AutoUpdateEnabled = currentState.AutoUpdateEnabled, SoftwareOwnedRoutes = currentState.SoftwareOwnedRoutes.ToList() };
+        Clone(appliedSnapshot) with
+        {
+            AutoUpdateEnabled = currentState.AutoUpdateEnabled,
+            SoftwareOwnedRoutes = currentState.SoftwareOwnedRoutes.ToList(),
+            BypassRouteChanges = currentState.BypassRouteChanges.ToList(),
+            LegacyBypassRoutesMigrated = currentState.LegacyBypassRoutesMigrated
+        };
 
     private static string NormalizeDomain(string domain) => domain.Trim().ToLowerInvariant();
 }

@@ -22,7 +22,7 @@ public sealed class SystemDomainResolver : IDomainResolver
         IPAddress[] addresses;
         try
         {
-            addresses = await Dns.GetHostAddressesAsync(normalized);
+            addresses = await Dns.GetHostAddressesAsync(normalized, cancellationToken);
         }
         catch (SocketException)
         {

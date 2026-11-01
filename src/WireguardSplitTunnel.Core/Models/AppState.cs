@@ -30,8 +30,11 @@ public sealed record AppState(
     // of the platform defaults in WireguardConfigCatalog.
     List<string>? CustomConfigDirectories = null,
     List<SoftwareLearnedDestinations>? SoftwareLearnedDestinations = null,
-    List<SoftwareOwnedRoute>? SoftwareOwnedRoutes = null)
+    List<SoftwareOwnedRoute>? SoftwareOwnedRoutes = null,
+    List<BypassRouteChange>? BypassRouteChanges = null,
+    bool LegacyBypassRoutesMigrated = false)
 {
+    public List<BypassRouteChange> BypassRouteChanges { get; init; } = BypassRouteChanges ?? [];
     public List<SoftwareLearnedDestinations> SoftwareLearnedDestinations { get; init; } = SoftwareLearnedDestinations ?? [];
     public List<SoftwareOwnedRoute> SoftwareOwnedRoutes { get; init; } = SoftwareOwnedRoutes ?? [];
 

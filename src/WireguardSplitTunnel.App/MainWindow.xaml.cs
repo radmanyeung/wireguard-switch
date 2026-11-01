@@ -26,6 +26,7 @@ public partial class MainWindow : Window
     private readonly IWireguardDetector detector = new SystemWireguardDetector();
     private readonly IDomainResolver domainResolver = new SystemDomainResolver();
     private readonly IRouteService routeService = new RouteService();
+    private readonly BypassRouteLeaseService bypassRouteLeases = new(new WindowsBypassRouteTable());
     private readonly IDnsCacheReader dnsCacheReader = OperatingSystem.IsWindows() ? new WindowsDnsCacheReader() : new NoOpDnsCacheReader();
     private readonly ISoftwarePolicyService softwarePolicyService = new SoftwareFirewallPolicyService();
     private readonly ISoftwareExecutableLocator softwareExecutableLocator = new SystemSoftwareExecutableLocator();
@@ -55,6 +56,7 @@ public partial class MainWindow : Window
     private readonly object softwareReapplyGate = new();
     private CancellationTokenSource? monitorRefreshCts;
     private readonly CancellationTokenSource dnsCacheLearningCts = new();
+    private readonly CancellationTokenSource routingWorkCts = new();
     private int softwareApplyInProgress;
     private int monitorRefreshInProgress;
     private int monitorRunGeneration;
@@ -62,7 +64,7 @@ public partial class MainWindow : Window
     private volatile bool suppressAutoSoftwareReapply;
     private bool mode2RoutingWarningShownThisSession;
     private bool incrementalDomainStateSavePending;
-    private const int BypassHalfDefaultMetric = 5;
+    private const int BypassHalfDefaultMetric = BypassRouteLeaseService.HalfDefaultMetric;
     private const int WireGuardHalfDefaultMetric = 35;
     private static readonly string[] SafeDnsFallbackServers = ["8.8.8.8", "1.1.1.1"];
 
@@ -146,7 +148,7 @@ public partial class MainWindow : Window
                 this.closeIntentTracker,
                 CreateApplicationCloseRequest(
                     runPostInstallSelfTestOnLoad),
-                _ => RestoreNormalRoutingOnExitAsync());
+                token => RestoreNormalRoutingOnExitAsync(token));
 
         Loaded += OnLoaded;
         Closing += OnWindowClosing;
@@ -220,6 +222,7 @@ public partial class MainWindow : Window
         }
 
         isWindowClosing = true;
+        routingWorkCts.Cancel();
         PrepareWindowsUpdateForClose();
         closeIntentTracker.ResolveNormalClose();
         NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
@@ -476,10 +479,10 @@ public partial class MainWindow : Window
 
             var result = await incrementalDnsRouteReconciler.ReconcileAsync(
                 state,
-                async (toAdd, _) =>
+                async (toAdd, token) =>
                 {
-                    await ApplyRoutesViaCurrentWireGuardAsync(toAdd, [], CancellationToken.None);
-                    await HealMissingDomainRoutesAsync(toAdd.ToList(), CancellationToken.None);
+                    await ApplyRoutesViaCurrentWireGuardAsync(toAdd, [], token);
+                    await HealMissingDomainRoutesAsync(toAdd.ToList(), token);
                 },
                 dnsCacheLearningCts.Token);
 
@@ -1340,7 +1343,15 @@ public partial class MainWindow : Window
     }
     private async Task<bool> RenewDomainRoutesLockedAsync(bool showMessage, bool fromStartup)
     {
-        await renewSemaphore.WaitAsync();
+        var cancellationToken = routingWorkCts.Token;
+        try
+        {
+            await renewSemaphore.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
         Interlocked.Exchange(ref renewInProgress, 1);
         try
         {
@@ -1349,7 +1360,12 @@ public partial class MainWindow : Window
                 return false;
             }
 
-            return await RenewDomainRoutesAsync(showMessage, fromStartup);
+            return await RenewDomainRoutesAsync(showMessage, fromStartup, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            logger.Info("Domain renew canceled for application close; routing gate released for restore.");
+            return false;
         }
         finally
         {
@@ -1420,9 +1436,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task<bool> RenewDomainRoutesAsync(bool showMessage, bool fromStartup)
+    private async Task<bool> RenewDomainRoutesAsync(bool showMessage, bool fromStartup, CancellationToken cancellationToken)
     {
-        if (!await WaitForWireguardInterfaceAsync(TimeSpan.FromSeconds(20)))
+        if (!await WaitForWireguardInterfaceAsync(TimeSpan.FromSeconds(20), cancellationToken))
         {
             if (showMessage)
             {
@@ -1459,10 +1475,10 @@ public partial class MainWindow : Window
                 return false;
             }
 
-            await EnsureDefaultRouteToBypassGatewayAsync(bypassTarget, CancellationToken.None);
-            await EnsureMode2DualHalfDefaultRoutesAsync(wireguardInterfaceName, bypassTarget, CancellationToken.None);
-            await EnsureWireGuardDnsReachableAsync(wireguardInterfaceName, CancellationToken.None);
-            await VerifyBypassNotBlockedAsync(bypassTarget, cancellationToken: CancellationToken.None);
+            await EnsureDefaultRouteToBypassGatewayAsync(bypassTarget, cancellationToken);
+            await EnsureMode2DualHalfDefaultRoutesAsync(wireguardInterfaceName, bypassTarget, cancellationToken);
+            await EnsureWireGuardDnsReachableAsync(wireguardInterfaceName, cancellationToken);
+            await VerifyBypassNotBlockedAsync(bypassTarget, cancellationToken);
 
             var domainRoutingCompatibility = EvaluateRoutingCompatibility(wireguardInterfaceName, enabledSoftwareRuleCount: 0);
             if (domainRoutingCompatibility.Status != RoutingStatus.Pass)
@@ -1494,8 +1510,8 @@ public partial class MainWindow : Window
             .Where(rule => rule.Enabled && rule.Mode == DomainRouteMode.UseWireGuard)
             .ToList();
 
-        var directResolvedRules = await coordinator.ResolveEnabledRulesAsync(enabledRules, CancellationToken.None);
-        var learnedRules = await LearnDnsCacheRulesAsync(enabledRules, CancellationToken.None);
+        var directResolvedRules = await coordinator.ResolveEnabledRulesAsync(enabledRules, cancellationToken);
+        var learnedRules = await LearnDnsCacheRulesAsync(enabledRules, cancellationToken).WaitAsync(cancellationToken);
         var resolvedRules = ResolvedRuleMergeService.Merge(directResolvedRules, learnedRules);
 
         var previousManagedIps = state.ManagedRouteSnapshot
@@ -1524,8 +1540,8 @@ public partial class MainWindow : Window
             .Except(newIps, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        await ApplyRoutesViaCurrentWireGuardAsync(toAdd, toRemove, CancellationToken.None);
-        await HealMissingDomainRoutesAsync(toAdd, CancellationToken.None);
+        await ApplyRoutesViaCurrentWireGuardAsync(toAdd, toRemove, cancellationToken);
+        await HealMissingDomainRoutesAsync(toAdd, cancellationToken);
 
         newSnapshot = SoftwareDomainRouteOwnership.PreserveMetadata(newSnapshot, state.ManagedRouteSnapshot);
         ResolutionStateUpdater.Apply(state, resolvedRules);
@@ -1671,12 +1687,15 @@ public partial class MainWindow : Window
                 }
                 foreach (var ip in additions.Where(ip => !protectedIps.Contains(ip)))
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var actualIndex = FindNetworkInterface(currentWireGuardInterfaceName)?.GetIPProperties().GetIPv4Properties()?.Index
                         ?? throw new InvalidOperationException("WireGuard interface does not expose an IPv4 interface index");
-                    await routeService.ApplyAsync(currentWireGuardInterfaceName, [ip], [], cancellationToken);
+                    // Finish and journal this one route before honoring close
+                    // cancellation, so cleanup never loses a successful add.
+                    await routeService.ApplyAsync(currentWireGuardInterfaceName, [ip], [], CancellationToken.None);
                     if (FindNetworkInterface(currentWireGuardInterfaceName)?.GetIPProperties().GetIPv4Properties()?.Index != actualIndex)
                         throw new InvalidOperationException("WireGuard interface changed during domain route installation");
-                    var exact = await softwareRouteWriter.ReadExactAsync(new(ip, actualIndex, "0.0.0.0", 3), cancellationToken)
+                    var exact = await softwareRouteWriter.ReadExactAsync(new(ip, actualIndex, "0.0.0.0", 3), CancellationToken.None)
                         ?? throw new InvalidOperationException("Domain route could not be confirmed on its installation interface");
                     var existing = state.ManagedRouteSnapshot.FindIndex(r => r.IpAddress == ip);
                     var metadata = new ManagedRouteEntry(existing >= 0 ? state.ManagedRouteSnapshot[existing].Domain : "__domain_pending__",
@@ -1703,22 +1722,23 @@ public partial class MainWindow : Window
         return message.Contains("was not found", StringComparison.OrdinalIgnoreCase)
             || message.Contains("does not expose an IPv4 interface index", StringComparison.OrdinalIgnoreCase);
     }
-    private async Task<bool> WaitForWireguardInterfaceAsync(TimeSpan timeout)
+    private async Task<bool> WaitForWireguardInterfaceAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         var started = DateTime.UtcNow;
         while (DateTime.UtcNow - started < timeout)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (detector.TryGetActiveInterface(out _))
             {
                 return true;
             }
 
-            await Task.Delay(1000);
+            await Task.Delay(1000, cancellationToken);
         }
 
         return false;
     }
-    private async Task RestoreNormalRoutingOnExitAsync()
+    private async Task RestoreNormalRoutingOnExitAsync(CancellationToken cancellationToken)
     {
         logger.Info("Restore on exit started.");
         if (!state.RestoreNormalRoutingOnExit)
@@ -1729,6 +1749,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        await RestoreBypassRoutesOnExitAsync(cancellationToken);
         var softwareOwnedBeforeCleanup = state.SoftwareOwnedRoutes.ToArray();
         await CleanupSoftwareRoutesOnExitAsync();
         if (!detector.TryGetActiveInterface(out var wireguardInterfaceName))
@@ -1761,6 +1782,26 @@ public partial class MainWindow : Window
         stateStore.Save(state); // Unverifiable legacy shared-route debt is deliberately retained.
 
         logger.Info($"Restore on exit completed. Removed managed routes: {managedIps.Count}");
+    }
+
+    private Task RestoreBypassRoutesOnExitAsync(CancellationToken cancellationToken)
+    {
+        // The physical adapter's routes survive WireGuard shutdown. Release
+        // them before checking for a live tunnel, including legacy /1 debt.
+        if (!state.LegacyBypassRoutesMigrated
+            && GetUnifiedGlobalMode() == DomainRouteMode.BypassWireGuard
+            && TryGetBypassDefaultGateway(string.Empty, out var target))
+        {
+            bypassRouteLeases.AdoptLegacyPair(BypassHalfDefaultKeys(target),
+                state.BypassRouteChanges, () => stateStore.Save(state), enabled: true);
+            state = state with { LegacyBypassRoutesMigrated = true };
+            stateStore.Save(state);
+        }
+
+        var restored = bypassRouteLeases.Restore(state.BypassRouteChanges,
+            () => stateStore.Save(state), cancellationToken);
+        logger.Info($"Restore on exit: restored {restored} bypass default route changes; remaining={state.BypassRouteChanges.Count}.");
+        return Task.CompletedTask;
     }
 
     private async Task RemoveWireGuardDnsHostRoutesAsync(string wireguardInterfaceName, CancellationToken cancellationToken)
@@ -2454,7 +2495,16 @@ public partial class MainWindow : Window
 
     private async Task ApplySoftwarePoliciesAsync(bool showMessage, string triggerReason, CancellationToken cancellationToken)
     {
-        await softwareApplySemaphore.WaitAsync(cancellationToken);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, routingWorkCts.Token);
+        cancellationToken = linked.Token;
+        try
+        {
+            await softwareApplySemaphore.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (routingWorkCts.IsCancellationRequested)
+        {
+            return;
+        }
         Interlocked.Exchange(ref softwareApplyInProgress, 1);
         try
         {
@@ -2508,7 +2558,7 @@ public partial class MainWindow : Window
                 GetUnifiedGlobalMode(),
                 cancellationToken);
 
-            var verification = await VerifySoftwareRulesAppliedAsync(effectiveRules);
+            var verification = await VerifySoftwareRulesAppliedAsync(effectiveRules).WaitAsync(cancellationToken);
             if (!verification.Verified && !verification.Unknown)
             {
                 logger.Info($"Software apply verification mismatch ({triggerReason}). Retrying once. detail={verification.Detail}");
@@ -2518,7 +2568,7 @@ public partial class MainWindow : Window
                     effectiveRules,
                     GetUnifiedGlobalMode(),
                     cancellationToken);
-                verification = await VerifySoftwareRulesAppliedAsync(effectiveRules);
+                verification = await VerifySoftwareRulesAppliedAsync(effectiveRules).WaitAsync(cancellationToken);
             }
 
             var unresolvedText = repairResult.UnresolvedProcessNames.Count == 0
@@ -2544,6 +2594,10 @@ public partial class MainWindow : Window
             {
                 logger.Info($"Software apply completed ({triggerReason}). enabled={effectiveRules.Count}, autoAdded={repairResult.Added}, autoUpdated={repairResult.Updated}, unresolved={repairResult.UnresolvedProcessNames.Count}, verify={(verification.Verified ? "ok" : "unknown")}.");
             }
+        }
+        catch (OperationCanceledException) when (routingWorkCts.IsCancellationRequested)
+        {
+            logger.Info("Software apply canceled for application close; routing gate released for restore.");
         }
         finally
         {
@@ -2883,11 +2937,13 @@ public partial class MainWindow : Window
         target = new DefaultGatewayTarget(string.Empty, -1, string.Empty);
         return false;
     }
-    private async Task EnsureDefaultRouteToBypassGatewayAsync(DefaultGatewayTarget target, CancellationToken cancellationToken)
+    private Task EnsureDefaultRouteToBypassGatewayAsync(DefaultGatewayTarget target, CancellationToken cancellationToken)
     {
-        var args = $"0.0.0.0 mask 0.0.0.0 {target.Gateway} if {target.InterfaceIndex} metric 1";
+        cancellationToken.ThrowIfCancellationRequested();
         logger.Info($"Forcing default route to bypass gateway: iface={target.InterfaceName}, index={target.InterfaceIndex}, gateway={target.Gateway}");
-        await EnsureRouteChangeOrAddAsync(args, "default bypass route", cancellationToken);
+        bypassRouteLeases.EnsureDefault(BypassKey(target, "0.0.0.0", 0),
+            state.BypassRouteChanges, () => stateStore.Save(state));
+        return Task.CompletedTask;
     }
 
     private async Task EnsureMode2DualHalfDefaultRoutesAsync(string wireguardInterfaceName, DefaultGatewayTarget bypassTarget, CancellationToken cancellationToken)
@@ -2898,18 +2954,30 @@ public partial class MainWindow : Window
         await Task.Delay(300, cancellationToken);
     }
 
-    private async Task EnsureBypassHalfDefaultRoutesAsync(DefaultGatewayTarget target, CancellationToken cancellationToken)
+    private Task EnsureBypassHalfDefaultRoutesAsync(DefaultGatewayTarget target, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         logger.Info($"Ensuring bypass /1 routes: iface={target.InterfaceName}, index={target.InterfaceIndex}, gateway={target.Gateway}, metric={BypassHalfDefaultMetric}");
-        await EnsureRouteChangeOrAddAsync(
-            $"0.0.0.0 mask 128.0.0.0 {target.Gateway} if {target.InterfaceIndex} metric {BypassHalfDefaultMetric}",
-            "bypass half-default route 0.0.0.0/1",
-            cancellationToken);
-        await EnsureRouteChangeOrAddAsync(
-            $"128.0.0.0 mask 128.0.0.0 {target.Gateway} if {target.InterfaceIndex} metric {BypassHalfDefaultMetric}",
-            "bypass half-default route 128.0.0.0/1",
-            cancellationToken);
+        bypassRouteLeases.EnsureHalfDefaults(BypassHalfDefaultKeys(target),
+            state.BypassRouteChanges, () => stateStore.Save(state),
+            migrateLegacyPair: !state.LegacyBypassRoutesMigrated);
+        if (!state.LegacyBypassRoutesMigrated)
+        {
+            state = state with { LegacyBypassRoutesMigrated = true };
+            stateStore.Save(state);
+        }
+        return Task.CompletedTask;
     }
+
+    private static BypassRouteKey BypassKey(DefaultGatewayTarget target, string destination, int prefixLength)
+    {
+        var nic = FindNetworkInterface(target.InterfaceName)
+            ?? throw new InvalidOperationException("The normal network adapter is no longer available.");
+        return new(destination, prefixLength, target.InterfaceIndex, nic.Id, target.Gateway);
+    }
+
+    private static BypassRouteKey[] BypassHalfDefaultKeys(DefaultGatewayTarget target) =>
+        [BypassKey(target, "0.0.0.0", 1), BypassKey(target, "128.0.0.0", 1)];
 
     private async Task EnsureWireGuardHalfDefaultRoutesAsync(string wireguardInterfaceName, CancellationToken cancellationToken)
     {

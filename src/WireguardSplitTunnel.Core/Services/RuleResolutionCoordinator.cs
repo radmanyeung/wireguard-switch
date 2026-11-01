@@ -32,7 +32,8 @@ public sealed class RuleResolutionCoordinator
             IReadOnlyCollection<string> resolvedIps;
             try
             {
-                resolvedIps = await resolver.ResolveAsync(rule.Domain, cancellationToken);
+                resolvedIps = await resolver.ResolveAsync(rule.Domain, cancellationToken)
+                    .WaitAsync(cancellationToken);
             }
             catch (OperationCanceledException)
             {
