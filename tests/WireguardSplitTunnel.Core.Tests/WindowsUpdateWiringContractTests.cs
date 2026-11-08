@@ -113,10 +113,11 @@ public sealed class WindowsUpdateWiringContractTests
         closing.Should().Contain(
             "closeIntentTracker.ResolveNormalClose();");
         closing.Should().Contain(
-            "applicationCloseOrchestrator");
-        closing.Should().Contain(".RunOnceAsync(");
-        // Close must never hang on a stuck restore: orchestration is
-        // cancellable and the window force-closes after a hard timeout.
+            "applicationCloseAttemptLifecycle.RunAsync(");
+        closing.Should().Contain(
+            "applicationCloseOrchestrator = CreateApplicationCloseOrchestrator()");
+        // The diagnostic delay never abandons cleanup: the handler always joins
+        // the actual attempt and only a successful result can authorize closing.
         closing.Should().Contain("Task.WhenAny(");
         closing.Should().Contain(
             "LogApplicationCloseResult(result);");
@@ -147,7 +148,7 @@ public sealed class WindowsUpdateWiringContractTests
         restore.IndexOf("stateStore.Save(state);", retireDebt, StringComparison.Ordinal).Should().BeGreaterThan(retireDebt);
         restore.Should().Contain("r.Domain != SoftwareSharedDomainDebt");
         closing.IndexOf("await StopSoftwareLearningAsync().WaitAsync(closeTimeoutCts.Token);", StringComparison.Ordinal)
-            .Should().BeLessThan(closing.IndexOf(".RunOnceAsync(", StringComparison.Ordinal));
+            .Should().BeLessThan(closing.IndexOf("applicationCloseAttemptLifecycle.RunAsync(", StringComparison.Ordinal));
         closing.Should().NotContain("stateStore.Save(state);");
         source.Should().Contain(
             "() => stateStore.Save(state)");

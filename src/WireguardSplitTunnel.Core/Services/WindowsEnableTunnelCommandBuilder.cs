@@ -8,17 +8,32 @@ public static class WindowsTunnelServiceDiscovery
 {
     public const string ServiceNamePrefix = "WireGuardTunnel$";
 
-    public static IReadOnlyList<string> ParseInstalledTunnelNames(IEnumerable<string> serviceNames) =>
+    public static IReadOnlyList<WindowsTunnelServiceIdentity> ParseInstalledServiceIdentities(
+        IEnumerable<string> serviceNames) =>
         serviceNames
             .Where(name => name.StartsWith(ServiceNamePrefix, StringComparison.OrdinalIgnoreCase))
-            .Select(name => name[ServiceNamePrefix.Length..])
-            .Where(name => !string.IsNullOrWhiteSpace(name))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(WindowsTunnelServiceIdentity.FromServiceName)
+            .DistinctBy(identity => identity.TunnelName, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(identity => identity.TunnelName, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    public static IReadOnlyList<string> ListInstalledTunnelNames()
+    public static IReadOnlyList<string> ParseInstalledTunnelNames(IEnumerable<string> serviceNames) =>
+        ParseInstalledServiceIdentities(serviceNames.Where(name =>
+                !name.StartsWith(ServiceNamePrefix, StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrWhiteSpace(name[ServiceNamePrefix.Length..])))
+            .Select(identity => identity.TunnelName)
+            .ToList();
+
+    public static IReadOnlyList<string> ListInstalledTunnelNames() =>
+        ParseInstalledTunnelNames(ListInstalledServiceNames(CancellationToken.None));
+
+    internal static IReadOnlyList<WindowsTunnelServiceIdentity> ListInstalledServiceIdentities(
+        CancellationToken cancellationToken) =>
+        ParseInstalledServiceIdentities(ListInstalledServiceNames(cancellationToken));
+
+    private static IReadOnlyList<string> ListInstalledServiceNames(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!OperatingSystem.IsWindows())
         {
             return [];
@@ -31,8 +46,20 @@ public static class WindowsTunnelServiceDiscovery
             return [];
         }
 
-        return ParseInstalledTunnelNames(servicesKey.GetSubKeyNames());
+        return servicesKey.GetSubKeyNames();
     }
+}
+
+public interface IWindowsTunnelServiceEnumerator
+{
+    Task<IReadOnlyList<WindowsTunnelServiceIdentity>> ListInstalledAsync(CancellationToken cancellationToken);
+}
+
+public sealed class RegistryWindowsTunnelServiceEnumerator : IWindowsTunnelServiceEnumerator
+{
+    public Task<IReadOnlyList<WindowsTunnelServiceIdentity>> ListInstalledAsync(
+        CancellationToken cancellationToken) =>
+        Task.FromResult(WindowsTunnelServiceDiscovery.ListInstalledServiceIdentities(cancellationToken));
 }
 
 /// <summary>

@@ -13,6 +13,7 @@ public sealed class ApplicationCloseOrchestratorTests
         var order = new List<string>();
         var tracker = NormalCloseTracker();
         var participant = new FakeParticipant(order: order);
+        var disconnect = new FakeUserCloseDisconnectParticipant(order: order);
         var actions = new SemaphoreCloseActions(order: order);
         var orchestrator = CreateOrchestrator(
             participant,
@@ -22,20 +23,24 @@ public sealed class ApplicationCloseOrchestratorTests
             {
                 order.Add("RestoreRoutes");
                 return Task.CompletedTask;
-            });
+            },
+            userCloseDisconnect: disconnect);
 
         var result = await orchestrator.RunOnceAsync();
 
         order.Should().Equal(
             "StopUpdateWork",
+            "PrepareDisconnect",
             "AcquireSoftware",
             "AcquireRenew",
             "RestoreRoutes",
+            "DisconnectTunnels",
             "SavePrimaryState",
             "ReleaseRenew",
             "ReleaseSoftware",
             "AuthorizeAndLaunch");
         result.Outcome.Should().Be(ApplicationCloseOutcome.HelperReady);
+        result.DisconnectResult.Should().BeSameAs(disconnect.Result);
         result.CanClose.Should().BeTrue();
         participant.LastContext!.Intent.Should().Be(ApplicationCloseIntent.UserOrApplicationClose);
     }
@@ -627,18 +632,415 @@ public sealed class ApplicationCloseOrchestratorTests
         await run.Should().ThrowAsync<OutOfMemoryException>().WithMessage("fatal");
     }
 
+    [Fact]
+    public async Task RunOnceAsync_WhenDisconnectFails_PreservesUnresolvedTargetsAndBlocksClose()
+    {
+        var unresolved = WindowsTunnelServiceIdentity.FromTunnelName("unresolved");
+        var disconnectResult = new CloseDisconnectResult(
+            false,
+            [new CloseDisconnectFailure(CloseDisconnectFailureKind.Verification, "still installed")],
+            [unresolved]);
+        var disconnect = new FakeUserCloseDisconnectParticipant
+        {
+            Result = disconnectResult
+        };
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync();
+
+        result.DisconnectResult.Should().BeSameAs(disconnectResult);
+        result.DisconnectResult!.UnresolvedTargets.Should().Equal(unresolved);
+        result.Failures.Should().Be(ApplicationCloseFailureFlags.UserCloseDisconnect);
+        actions.SaveCount.Should().Be(0);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_WhenRestoreFails_StillDisconnectsButDoesNotSaveAuthorizeOrClose()
+    {
+        var disconnect = new FakeUserCloseDisconnectParticipant();
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            _ => Task.FromException(new IOException("restore failed")),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync();
+
+        disconnect.DisconnectCount.Should().Be(1);
+        result.DisconnectResult.Should().BeSameAs(disconnect.Result);
+        result.Failures.Should().Be(ApplicationCloseFailureFlags.RestoreRoutes);
+        actions.SaveCount.Should().Be(0);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_WhenRestoreAndDisconnectFail_PreservesBothFailuresAndDisconnectResult()
+    {
+        var disconnectResult = new CloseDisconnectResult(
+            false,
+            [new CloseDisconnectFailure(CloseDisconnectFailureKind.Stop, "stop failed")],
+            []);
+        var disconnect = new FakeUserCloseDisconnectParticipant
+        {
+            Result = disconnectResult
+        };
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            _ => Task.FromException(new IOException("restore failed")),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync();
+
+        result.Failures.Should().Be(
+            ApplicationCloseFailureFlags.RestoreRoutes |
+            ApplicationCloseFailureFlags.UserCloseDisconnect);
+        result.DisconnectResult.Should().BeSameAs(disconnectResult);
+        actions.SaveCount.Should().Be(0);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_WhenPreparationFails_StillAttemptsRecordedCleanupButBlocksClose()
+    {
+        var disconnect = new FakeUserCloseDisconnectParticipant
+        {
+            Preparation = new CloseDisconnectPreparation(
+                Guid.NewGuid(),
+                new CloseDisconnectFailure(CloseDisconnectFailureKind.EnableWait, "enable failed"))
+        };
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync();
+
+        disconnect.DisconnectCount.Should().Be(1);
+        result.Failures.Should().Be(ApplicationCloseFailureFlags.UserCloseDisconnect);
+        actions.SaveCount.Should().Be(0);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(ApplicationCloseIntent.InstallerMaintenance)]
+    [InlineData(ApplicationCloseIntent.SessionEnding)]
+    [InlineData(ApplicationCloseIntent.ElevationHandoff)]
+    [InlineData(ApplicationCloseIntent.UnknownOrAbnormal)]
+    public async Task RunOnceAsync_NonUserCloseIntents_NeverPrepareDisconnectOrJournal(
+        ApplicationCloseIntent intent)
+    {
+        var restored = 0;
+        var disconnect = new FakeUserCloseDisconnectParticipant();
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            TrackerWith(intent),
+            _ =>
+            {
+                restored++;
+                return Task.CompletedTask;
+            },
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync();
+
+        disconnect.PrepareCount.Should().Be(0);
+        disconnect.DisconnectCount.Should().Be(0);
+        disconnect.JournalCount.Should().Be(0);
+        result.DisconnectResult.Should().BeNull();
+        restored.Should().Be(intent == ApplicationCloseIntent.InstallerMaintenance ? 0 : 1);
+        actions.SaveCount.Should().Be(1);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_RepeatedUserCloseSharesOnePrepareAndDisconnectOperation()
+    {
+        var prepareStarted = AsyncSignal();
+        var allowPrepare = AsyncSignal();
+        var disconnect = new FakeUserCloseDisconnectParticipant
+        {
+            Prepare = async _ =>
+            {
+                prepareStarted.SetResult();
+                await allowPrepare.Task;
+            }
+        };
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            userCloseDisconnect: disconnect);
+
+        var first = orchestrator.RunOnceAsync();
+        await prepareStarted.Task;
+        var second = orchestrator.RunOnceAsync();
+        second.Should().BeSameAs(first);
+        allowPrepare.SetResult();
+        await first;
+
+        orchestrator.RunOnceAsync().Should().BeSameAs(first);
+        disconnect.PrepareCount.Should().Be(1);
+        disconnect.DisconnectCount.Should().Be(1);
+        disconnect.JournalCount.Should().Be(1);
+        actions.SaveCount.Should().Be(1);
+        participant.AuthorizationCount.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(ApplicationCloseIntent.InstallerMaintenance)]
+    [InlineData(ApplicationCloseIntent.SessionEnding)]
+    [InlineData(ApplicationCloseIntent.ElevationHandoff)]
+    public async Task RunOnceAsync_WhenIntentChangesWhileUpdateStopIsPending_ReevaluatesBeforePrepare(
+        ApplicationCloseIntent intent)
+    {
+        var stopStarted = AsyncSignal();
+        var allowStop = AsyncSignal();
+        var restored = 0;
+        var tracker = NormalCloseTracker();
+        var disconnect = new FakeUserCloseDisconnectParticipant();
+        var participant = new FakeParticipant(
+            stop: async _ =>
+            {
+                stopStarted.SetResult();
+                await allowStop.Task;
+            });
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            tracker,
+            _ =>
+            {
+                restored++;
+                return Task.CompletedTask;
+            },
+            userCloseDisconnect: disconnect);
+
+        var closeTask = orchestrator.RunOnceAsync();
+        await stopStarted.Task;
+        TransitionTo(tracker, intent);
+        allowStop.SetResult();
+        var result = await closeTask;
+
+        disconnect.PrepareCount.Should().Be(0);
+        disconnect.DisconnectCount.Should().Be(0);
+        disconnect.JournalCount.Should().Be(0);
+        result.DisconnectResult.Should().BeNull();
+        restored.Should().Be(intent == ApplicationCloseIntent.InstallerMaintenance ? 0 : 1);
+        actions.SaveCount.Should().Be(1);
+        participant.AuthorizationCount.Should().Be(0);
+        result.Failures.Should().Be(ApplicationCloseFailureFlags.None);
+        result.CanClose.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(ApplicationCloseIntent.InstallerMaintenance)]
+    [InlineData(ApplicationCloseIntent.SessionEnding)]
+    [InlineData(ApplicationCloseIntent.ElevationHandoff)]
+    public async Task RunOnceAsync_WhenIntentChangesWhilePrepareIsPending_ReevaluatesBeforeDisconnect(
+        ApplicationCloseIntent intent)
+    {
+        var prepareStarted = AsyncSignal();
+        var allowPrepare = AsyncSignal();
+        var restored = 0;
+        var tracker = NormalCloseTracker();
+        var disconnect = new FakeUserCloseDisconnectParticipant
+        {
+            Prepare = async _ =>
+            {
+                prepareStarted.SetResult();
+                await allowPrepare.Task;
+            }
+        };
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            tracker,
+            _ =>
+            {
+                restored++;
+                return Task.CompletedTask;
+            },
+            userCloseDisconnect: disconnect);
+
+        var closeTask = orchestrator.RunOnceAsync();
+        await prepareStarted.Task;
+        TransitionTo(tracker, intent);
+        allowPrepare.SetResult();
+        var result = await closeTask;
+
+        disconnect.PrepareCount.Should().Be(1);
+        disconnect.DisconnectCount.Should().Be(0);
+        result.DisconnectResult.Should().BeNull();
+        restored.Should().Be(intent == ApplicationCloseIntent.InstallerMaintenance ? 0 : 1);
+        actions.SaveCount.Should().Be(1);
+        participant.AuthorizationCount.Should().Be(0);
+        result.Failures.Should().Be(ApplicationCloseFailureFlags.None);
+        result.CanClose.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_WhenDisconnectIsCancelled_DoesNotSaveAuthorizeOrReportCloseable()
+    {
+        using var cancellationSource = new CancellationTokenSource();
+        var disconnect = new FakeUserCloseDisconnectParticipant
+        {
+            Disconnect = token =>
+            {
+                cancellationSource.Cancel();
+                return Task.FromCanceled(token);
+            }
+        };
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync(cancellationSource.Token);
+
+        result.Failures.Should().HaveFlag(ApplicationCloseFailureFlags.Cancelled);
+        result.Failures.Should().HaveFlag(ApplicationCloseFailureFlags.UserCloseDisconnect);
+        actions.SaveCount.Should().Be(0);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_WhenCancellationFollowsSuccessfulDisconnectBeforeSave_BlocksCloseWithoutChangingDisconnectResult()
+    {
+        using var cancellationSource = new CancellationTokenSource();
+        var disconnect = new FakeUserCloseDisconnectParticipant
+        {
+            Disconnect = _ =>
+            {
+                cancellationSource.Cancel();
+                return Task.CompletedTask;
+            }
+        };
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions();
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync(cancellationSource.Token);
+
+        result.Failures.Should().Be(
+            ApplicationCloseFailureFlags.Cancelled |
+            ApplicationCloseFailureFlags.UserCloseDisconnect);
+        result.DisconnectResult.Should().BeSameAs(disconnect.Result);
+        result.DisconnectResult!.Success.Should().BeTrue();
+        result.DisconnectResult.Failures.Should().BeEmpty();
+        actions.SaveCount.Should().Be(0);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_WhenSaveIsCancelledAfterSuccessfulDisconnect_BlocksCloseWithoutChangingDisconnectResult()
+    {
+        var disconnect = new FakeUserCloseDisconnectParticipant();
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions
+        {
+            SaveException = new OperationCanceledException("save cancelled")
+        };
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync();
+
+        result.Failures.Should().Be(
+            ApplicationCloseFailureFlags.Cancelled |
+            ApplicationCloseFailureFlags.UserCloseDisconnect);
+        result.DisconnectResult.Should().BeSameAs(disconnect.Result);
+        result.DisconnectResult!.Success.Should().BeTrue();
+        result.DisconnectResult.Failures.Should().BeEmpty();
+        actions.SaveCount.Should().Be(1);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_WhenCancellationFollowsSuccessfulSave_BlocksCloseWithoutChangingDisconnectResult()
+    {
+        using var cancellationSource = new CancellationTokenSource();
+        var disconnect = new FakeUserCloseDisconnectParticipant();
+        var participant = new FakeParticipant();
+        var actions = new SemaphoreCloseActions
+        {
+            SaveSucceeded = cancellationSource.Cancel
+        };
+        var orchestrator = CreateOrchestrator(
+            participant,
+            actions,
+            NormalCloseTracker(),
+            userCloseDisconnect: disconnect);
+
+        var result = await orchestrator.RunOnceAsync(cancellationSource.Token);
+
+        result.Failures.Should().Be(
+            ApplicationCloseFailureFlags.Cancelled |
+            ApplicationCloseFailureFlags.UserCloseDisconnect);
+        result.DisconnectResult.Should().BeSameAs(disconnect.Result);
+        result.DisconnectResult!.Success.Should().BeTrue();
+        result.DisconnectResult.Failures.Should().BeEmpty();
+        actions.SaveCount.Should().Be(1);
+        participant.AuthorizationCount.Should().Be(0);
+        result.CanClose.Should().BeFalse();
+    }
+
     private static ApplicationCloseOrchestrator CreateOrchestrator(
         FakeParticipant participant,
         SemaphoreCloseActions actions,
         ApplicationCloseIntentTracker tracker,
         Func<CancellationToken, Task>? restore = null,
-        ApplicationCloseRequest? request = null) =>
+        ApplicationCloseRequest? request = null,
+        IUserCloseDisconnectParticipant? userCloseDisconnect = null) =>
         new(
             participant,
             actions,
             tracker,
             request ?? ValidRequest(),
-            restore ?? (_ => Task.CompletedTask));
+            restore ?? (_ => Task.CompletedTask),
+            userCloseDisconnect);
 
     private static ApplicationCloseRequest ValidRequest() =>
         new(true, false, 42, 1, "C:\\app\\app.exe");
@@ -649,6 +1051,14 @@ public sealed class ApplicationCloseOrchestratorTests
     private static ApplicationCloseIntentTracker TrackerWith(ApplicationCloseIntent intent)
     {
         var tracker = new ApplicationCloseIntentTracker();
+        TransitionTo(tracker, intent);
+        return tracker;
+    }
+
+    private static void TransitionTo(
+        ApplicationCloseIntentTracker tracker,
+        ApplicationCloseIntent intent)
+    {
         switch (intent)
         {
             case ApplicationCloseIntent.UserOrApplicationClose:
@@ -664,12 +1074,57 @@ public sealed class ApplicationCloseOrchestratorTests
                 tracker.ResolveInstallerMaintenance();
                 break;
         }
-
-        return tracker;
     }
 
     private static TaskCompletionSource AsyncSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private sealed class FakeUserCloseDisconnectParticipant : IUserCloseDisconnectParticipant
+    {
+        private readonly List<string>? _order;
+
+        public FakeUserCloseDisconnectParticipant(List<string>? order = null)
+        {
+            _order = order;
+        }
+
+        public CloseDisconnectPreparation Preparation { get; init; } =
+            new(Guid.NewGuid(), null);
+        public CloseDisconnectResult Result { get; init; } = new(true, [], []);
+        public Func<CancellationToken, Task>? Prepare { get; init; }
+        public Func<CancellationToken, Task>? Disconnect { get; init; }
+        public int PrepareCount { get; private set; }
+        public int DisconnectCount { get; private set; }
+        public int JournalCount { get; private set; }
+
+        public async Task<CloseDisconnectPreparation> PrepareAsync(
+            CancellationToken cancellationToken)
+        {
+            PrepareCount++;
+            JournalCount++;
+            _order?.Add("PrepareDisconnect");
+            if (Prepare is not null)
+            {
+                await Prepare(cancellationToken);
+            }
+
+            return Preparation;
+        }
+
+        public async Task<CloseDisconnectResult> DisconnectAsync(
+            CloseDisconnectPreparation preparation,
+            CancellationToken cancellationToken)
+        {
+            DisconnectCount++;
+            _order?.Add("DisconnectTunnels");
+            if (Disconnect is not null)
+            {
+                await Disconnect(cancellationToken);
+            }
+
+            return Result;
+        }
+    }
 
     private sealed class FakeParticipant(
         Func<CancellationToken, Task>? stop = null,
@@ -728,6 +1183,7 @@ public sealed class ApplicationCloseOrchestratorTests
 
         public Exception? GateException { get; init; }
         public Exception? SaveException { get; init; }
+        public Action? SaveSucceeded { get; init; }
         public int RunCount { get; private set; }
         public int SaveCount { get; private set; }
 
@@ -772,6 +1228,8 @@ public sealed class ApplicationCloseOrchestratorTests
             {
                 throw SaveException;
             }
+
+            SaveSucceeded?.Invoke();
         }
     }
 

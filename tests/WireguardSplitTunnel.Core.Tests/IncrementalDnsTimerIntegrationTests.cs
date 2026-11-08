@@ -42,10 +42,11 @@ public sealed class IncrementalDnsTimerIntegrationTests
         closingMethod.Should().Contain("dnsCacheLearningTimer.Stop();");
         closingMethod.Should().Contain("dnsCacheLearningCts.Cancel();");
         closingMethod.Should().Contain(
-            "applicationCloseOrchestrator");
-        closingMethod.Should().Contain(".RunOnceAsync(");
-        // Close must never hang on a stuck restore: orchestration is
-        // cancellable and the window force-closes after a hard timeout.
+            "applicationCloseAttemptLifecycle.RunAsync(");
+        closingMethod.Should().Contain(
+            "applicationCloseOrchestrator = CreateApplicationCloseOrchestrator()");
+        // The diagnostic delay never abandons cleanup: the handler always joins
+        // the actual attempt and only a successful result can authorize closing.
         closingMethod.Should().Contain("Task.WhenAny(");
         closingMethod.Should().NotContain(
             "DomainRouteOperationSerializer.RunAsync");
@@ -99,15 +100,12 @@ public sealed class IncrementalDnsTimerIntegrationTests
             source,
             "private async Task ApplySoftwarePoliciesAsync",
             "private async void OnApplySoftwareClicked");
-        var gateAcquire = softwareApplyMethod.IndexOf(
-            "await softwareApplySemaphore.WaitAsync(cancellationToken)",
-            StringComparison.Ordinal);
-        var closingRecheck = softwareApplyMethod.IndexOf(
-            "if (isWindowClosing)",
-            gateAcquire < 0 ? 0 : gateAcquire,
-            StringComparison.Ordinal);
-        gateAcquire.Should().BeGreaterThanOrEqualTo(0);
-        closingRecheck.Should().BeGreaterThan(gateAcquire);
+        softwareApplyMethod.Should().Contain("softwareApplyCoordinator.RunAsync(");
+        softwareApplyMethod.Should().Contain("CanApplySoftwarePolicies,");
+        source.Should().Contain(
+            "private readonly SoftwareApplyCoordinator softwareApplyCoordinator;");
+        source.Should().Contain(
+            "softwareApplyCoordinator = new SoftwareApplyCoordinator(softwareApplySemaphore);");
     }
 
     private static string ExtractBetween(string source, string startMarker, string endMarker)

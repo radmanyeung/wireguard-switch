@@ -42,7 +42,8 @@ public enum ApplicationCloseFailureFlags
     RestoreRoutes = 4,
     SavePrimaryState = 8,
     Cancelled = 16,
-    AuthorizationOrHelper = 32
+    AuthorizationOrHelper = 32,
+    UserCloseDisconnect = 64
 }
 
 public sealed class ApplicationCloseResult
@@ -50,26 +51,34 @@ public sealed class ApplicationCloseResult
     private ApplicationCloseResult(
         ApplicationCloseOutcome outcome,
         ApplicationCloseFailureFlags failures,
-        UpdateCloseAuthorizationResult? authorizationResult)
+        UpdateCloseAuthorizationResult? authorizationResult,
+        CloseDisconnectResult? disconnectResult)
     {
         Outcome = outcome;
         Failures = failures;
         AuthorizationResult = authorizationResult;
+        DisconnectResult = disconnectResult;
     }
 
     public ApplicationCloseOutcome Outcome { get; }
     public ApplicationCloseFailureFlags Failures { get; }
     public UpdateCloseAuthorizationResult? AuthorizationResult { get; }
+    public CloseDisconnectResult? DisconnectResult { get; }
 
-    public bool CanClose => true;
+    public bool CanClose =>
+        (Failures & ApplicationCloseFailureFlags.UserCloseDisconnect) == 0 &&
+        (DisconnectResult is null ||
+         (Failures & ApplicationCloseFailureFlags.RestoreRoutes) == 0);
 
     internal static ApplicationCloseResult WithoutAuthorization(
-        ApplicationCloseFailureFlags failures = ApplicationCloseFailureFlags.None) =>
-        new(ApplicationCloseOutcome.NoAuthorization, failures, null);
+        ApplicationCloseFailureFlags failures = ApplicationCloseFailureFlags.None,
+        CloseDisconnectResult? disconnectResult = null) =>
+        new(ApplicationCloseOutcome.NoAuthorization, failures, null, disconnectResult);
 
     internal static ApplicationCloseResult FromAuthorization(
         UpdateCloseAuthorizationResult result,
-        ApplicationCloseFailureFlags failures = ApplicationCloseFailureFlags.None)
+        ApplicationCloseFailureFlags failures = ApplicationCloseFailureFlags.None,
+        CloseDisconnectResult? disconnectResult = null)
     {
         ArgumentNullException.ThrowIfNull(result);
 
@@ -84,7 +93,7 @@ public sealed class ApplicationCloseResult
             _ => throw new InvalidOperationException("Unsupported update close authorization outcome.")
         };
 
-        return new ApplicationCloseResult(outcome, failures, result);
+        return new ApplicationCloseResult(outcome, failures, result, disconnectResult);
     }
 }
 
@@ -96,6 +105,7 @@ public sealed class ApplicationCloseOrchestrator
     private readonly ApplicationCloseIntentTracker _intentTracker;
     private readonly ApplicationCloseRequest _request;
     private readonly Func<CancellationToken, Task> _restoreRoutesAsync;
+    private readonly IUserCloseDisconnectParticipant? _userCloseDisconnect;
     private Task<ApplicationCloseResult>? _cachedRun;
 
     public ApplicationCloseOrchestrator(
@@ -103,7 +113,8 @@ public sealed class ApplicationCloseOrchestrator
         IApplicationCloseActions closeActions,
         ApplicationCloseIntentTracker intentTracker,
         ApplicationCloseRequest request,
-        Func<CancellationToken, Task> restoreRoutesAsync)
+        Func<CancellationToken, Task> restoreRoutesAsync,
+        IUserCloseDisconnectParticipant? userCloseDisconnect = null)
     {
         _updateCloseParticipant = updateCloseParticipant
             ?? throw new ArgumentNullException(nameof(updateCloseParticipant));
@@ -115,6 +126,7 @@ public sealed class ApplicationCloseOrchestrator
             ?? throw new ArgumentNullException(nameof(request));
         _restoreRoutesAsync = restoreRoutesAsync
             ?? throw new ArgumentNullException(nameof(restoreRoutesAsync));
+        _userCloseDisconnect = userCloseDisconnect;
     }
 
     /// <summary>
@@ -162,8 +174,13 @@ public sealed class ApplicationCloseOrchestrator
         CancellationToken cancellationToken)
     {
         var failures = ApplicationCloseFailureFlags.None;
-        var installerMaintenance =
-            _intentTracker.Current == ApplicationCloseIntent.InstallerMaintenance;
+        CloseDisconnectPreparation? preparation = null;
+        CloseDisconnectResult? disconnectResult = null;
+        var disconnectSucceeded = false;
+
+        bool RequiresUserCloseDisconnect() =>
+            _userCloseDisconnect is not null &&
+            _intentTracker.Current == ApplicationCloseIntent.UserOrApplicationClose;
 
         try
         {
@@ -172,10 +189,42 @@ public sealed class ApplicationCloseOrchestrator
         catch (OperationCanceledException)
         {
             failures |= ApplicationCloseFailureFlags.Cancelled;
+            if (RequiresUserCloseDisconnect())
+            {
+                failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+            }
         }
         catch (Exception exception) when (IsOperationalFailure(exception))
         {
             failures |= ApplicationCloseFailureFlags.StopUpdateWork;
+        }
+
+        if (RequiresUserCloseDisconnect())
+        {
+            try
+            {
+                preparation = await _userCloseDisconnect!.PrepareAsync(cancellationToken);
+                if ((preparation is null || preparation.Failure is not null) &&
+                    RequiresUserCloseDisconnect())
+                {
+                    failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                failures |= ApplicationCloseFailureFlags.Cancelled;
+                if (RequiresUserCloseDisconnect())
+                {
+                    failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+                }
+            }
+            catch (Exception exception) when (IsOperationalFailure(exception))
+            {
+                if (RequiresUserCloseDisconnect())
+                {
+                    failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+                }
+            }
         }
 
         try
@@ -185,7 +234,7 @@ public sealed class ApplicationCloseOrchestrator
                 {
                     try
                     {
-                        if (!installerMaintenance)
+                        if (_intentTracker.Current != ApplicationCloseIntent.InstallerMaintenance)
                         {
                             await _restoreRoutesAsync(routingToken);
                         }
@@ -193,23 +242,64 @@ public sealed class ApplicationCloseOrchestrator
                     catch (OperationCanceledException)
                     {
                         failures |= ApplicationCloseFailureFlags.Cancelled;
+                        if (RequiresUserCloseDisconnect())
+                        {
+                            failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+                        }
                     }
                     catch (Exception exception) when (IsOperationalFailure(exception))
                     {
                         failures |= ApplicationCloseFailureFlags.RestoreRoutes;
                     }
 
-                    try
+                    if (RequiresUserCloseDisconnect() && preparation is not null)
                     {
-                        _closeActions.SavePrimaryState();
+                        try
+                        {
+                            disconnectResult = await _userCloseDisconnect!.DisconnectAsync(
+                                preparation,
+                                routingToken);
+                            disconnectSucceeded = disconnectResult is { Success: true };
+                            if (!disconnectSucceeded)
+                            {
+                                failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            failures |= ApplicationCloseFailureFlags.Cancelled |
+                                         ApplicationCloseFailureFlags.UserCloseDisconnect;
+                        }
+                        catch (Exception exception) when (IsOperationalFailure(exception))
+                        {
+                            failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+                        }
                     }
-                    catch (OperationCanceledException)
+
+                    var canSavePrimaryState = !RequiresUserCloseDisconnect() ||
+                        (disconnectSucceeded &&
+                         (failures & (ApplicationCloseFailureFlags.RestoreRoutes |
+                                      ApplicationCloseFailureFlags.Cancelled |
+                                      ApplicationCloseFailureFlags.UserCloseDisconnect)) == 0 &&
+                         !routingToken.IsCancellationRequested);
+                    if (canSavePrimaryState)
                     {
-                        failures |= ApplicationCloseFailureFlags.Cancelled;
-                    }
-                    catch (Exception exception) when (IsOperationalFailure(exception))
-                    {
-                        failures |= ApplicationCloseFailureFlags.SavePrimaryState;
+                        try
+                        {
+                            _closeActions.SavePrimaryState();
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            failures |= ApplicationCloseFailureFlags.Cancelled;
+                            if (RequiresUserCloseDisconnect())
+                            {
+                                failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+                            }
+                        }
+                        catch (Exception exception) when (IsOperationalFailure(exception))
+                        {
+                            failures |= ApplicationCloseFailureFlags.SavePrimaryState;
+                        }
                     }
                 },
                 cancellationToken);
@@ -226,16 +316,25 @@ public sealed class ApplicationCloseOrchestrator
         if (cancellationToken.IsCancellationRequested)
         {
             failures |= ApplicationCloseFailureFlags.Cancelled;
+            if (RequiresUserCloseDisconnect())
+            {
+                failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
+            }
+        }
+
+        if (RequiresUserCloseDisconnect() && !disconnectSucceeded)
+        {
+            failures |= ApplicationCloseFailureFlags.UserCloseDisconnect;
         }
 
         if (failures != ApplicationCloseFailureFlags.None)
         {
-            return ApplicationCloseResult.WithoutAuthorization(failures);
+            return ApplicationCloseResult.WithoutAuthorization(failures, disconnectResult);
         }
 
-        if (installerMaintenance)
+        if (_intentTracker.Current == ApplicationCloseIntent.InstallerMaintenance)
         {
-            return ApplicationCloseResult.WithoutAuthorization();
+            return ApplicationCloseResult.WithoutAuthorization(disconnectResult: disconnectResult);
         }
 
         if (!UpdateCloseAuthorizationContext.TryCreate(
@@ -248,7 +347,7 @@ public sealed class ApplicationCloseOrchestrator
                 out var context) ||
             !UpdateCloseEligibility.IsEligible(context))
         {
-            return ApplicationCloseResult.WithoutAuthorization();
+            return ApplicationCloseResult.WithoutAuthorization(disconnectResult: disconnectResult);
         }
 
         try
@@ -262,8 +361,11 @@ public sealed class ApplicationCloseOrchestrator
                 ? ApplicationCloseResult.FromAuthorization(
                     UpdateCloseAuthorizationResult.RecoverableFailure(
                         "helper_ready_failed"),
-                    ApplicationCloseFailureFlags.AuthorizationOrHelper)
-                : ApplicationCloseResult.FromAuthorization(authorizationResult);
+                    ApplicationCloseFailureFlags.AuthorizationOrHelper,
+                    disconnectResult)
+                : ApplicationCloseResult.FromAuthorization(
+                    authorizationResult,
+                    disconnectResult: disconnectResult);
         }
         catch (OperationCanceledException)
         {
@@ -271,14 +373,16 @@ public sealed class ApplicationCloseOrchestrator
                 UpdateCloseAuthorizationResult.RecoverableFailure(
                     "helper_ready_cancelled"),
                 ApplicationCloseFailureFlags.AuthorizationOrHelper |
-                ApplicationCloseFailureFlags.Cancelled);
+                ApplicationCloseFailureFlags.Cancelled,
+                disconnectResult);
         }
         catch (Exception exception) when (IsOperationalFailure(exception))
         {
             return ApplicationCloseResult.FromAuthorization(
                 UpdateCloseAuthorizationResult.RecoverableFailure(
                     "helper_ready_failed"),
-                ApplicationCloseFailureFlags.AuthorizationOrHelper);
+                ApplicationCloseFailureFlags.AuthorizationOrHelper,
+                disconnectResult);
         }
     }
 

@@ -61,6 +61,72 @@ Lessons from real fresh-machine installs:
    Configs whose `AllowedIPs` would trigger the WireGuard kill switch are
    sanitized automatically; the original file is never modified.
 
+## Test selected config (Windows)
+
+**Test Config** accepts only the currently selected plaintext, single-peer
+NordVPN `.conf` file. It rejects `.conf.dpapi` files, multiple peers,
+non-NordVPN endpoints, unsupported fields, and configuration hooks. Before any
+network change, it shows the selected full path and warns that internet access
+may be interrupted while running WireGuard tunnel services are stopped and
+restored. The default answer is **No**.
+
+After confirmation, the app downloads NordVPN metadata, saves a protected
+backup and recovery journal, and stops the originally running WireGuard tunnel
+services. It tests the original server first, then, if necessary, at most three
+validated same-country recommendations; an exact duplicate of the original is
+skipped. Each probe uses a separately owned temporary tunnel. A server passes
+only when that tunnel records a fresh handshake for the expected peer, an IPv4
+HTTPS request bound to the configuration's VPN source address succeeds through
+the temporary `/32` probe route, and Cloudflare's trace reports the expected
+country. A passing original is `Healthy` and is not edited.
+
+If the original fails but a candidate passes, the app rechecks the selected
+file's identity and content, atomically changes only the `[Peer]` `Endpoint`
+and `PublicKey` values, and verifies the saved replacement. Other fields,
+comments, formatting, and encoding are retained. A concurrent edit or file
+substitution blocks replacement and recycling so the newer file is preserved.
+`Healthy` and `Repaired` results never offer deletion.
+
+Cleanup removes each owned probe route and temporary tunnel before restarting
+only the originally running services recorded with matching identities. If
+owned cleanup, service identity checks, or restoration verification fails, the
+app reports failure rather than claiming that networking was restored.
+
+Only an `Unrepaired` result offers to move the exact tested file to the Recycle
+Bin. That prompt includes its full path and defaults to **No**. Cancellation,
+parse or metadata failures, and workflow or restoration failures do not offer
+recycling. A changed file is not recycled. After confirmed recycling, the app
+clears the saved selection; if that state cannot be saved, it reports the
+problem instead of pretending the selection was cleared.
+
+Backups and recovery records are stored in:
+
+```text
+%LOCALAPPDATA%\WireguardSplitTunnel\config-check\<32-character-session-id>\
+```
+
+The restricted session directory contains `original.bin` (the exact pre-test
+copy), `journal.json`, and, as applicable, `displaced.bin` (the pre-repair
+copy), `attempt.json`, or `recycle.json`. Replacement staging and recycle
+quarantine paths are also recorded in the journals. On startup, before
+auto-enable, route renewal, DNS learning, or software reapply, the app discovers
+all incomplete journals and resumes replacement, service, and recycle recovery
+from their protected identities even when a source is missing or unparseable.
+Completed journals are skipped. The shared routing gate remains held through
+service restoration and any applicable route renewal, and a repaired config's
+sanitized derived copy is reconciled before its original service restarts.
+
+Ambiguous, unrelated, or changed content is retained for manual review. If
+recovery cannot complete, automatic enable and startup routing work remain
+paused, the status and app log explain how to retry, and no journal or artifact
+is deleted to clear the blockage. Restart the app to retry recovery; preserve
+these files rather than deleting them. An incomplete journal also blocks another
+check until recovery completes.
+
+Offline unit and contract tests use fake adapters/processes and synthetic
+temporary files. They do not prove a real NordVPN handshake, HTTPS egress or
+country result, live service/routing restoration, or Recycle Bin behavior.
+
 ## If someone downloads from GitHub
 - If they download the repository source (`Code` -> `Download ZIP`), they should extract it first, then run `install.cmd`.
 - After install finishes, start the app from the desktop shortcut (or `start.cmd` inside the installed copy at `C:\Program Files\WireguardSplitTunnel`). The `start.cmd` in the downloaded/extracted folder is not a launch entry point and will refuse to start by design.
@@ -94,10 +160,13 @@ install, up to date, an error, or `RecoveryBlocked`.
 
 A ready update is installed only after an eligible, elevated, normal app close.
 A crash, forced termination, Windows session ending, reboot, or a non-elevated
-run does not authorize installation. The app restores its routes and saves its
-state first, then starts the protected updater. It deliberately does not reopen
-itself after a close-time update; start it normally next time, when the new
-version performs its health check and either commits or rolls back safely.
+run does not authorize installation. On deliberate user close, existing route
+cleanup must finish first, followed by verified tunnel disconnect and final
+state save; only then can the app authorize and start the protected updater.
+A failed close or **Close anyway** never authorizes installation. The app
+deliberately does not reopen itself after a close-time update; start it normally
+next time, when the new version performs its health check and either commits or
+rolls back safely.
 
 Updater diagnostics are written to:
 
@@ -279,22 +348,57 @@ exit-routing repair adds cleanup tracking for the physical default
 route and bypass `/1` pair. Installing this repair preserves the saved rules and
 does not change the original WireGuard configuration.
 
-Enable **Restore normal routing when app exits** if WireGuard should regain
-control after this app closes. On a normal close, the app releases its physical
-network bypass `/1` routes and restores the previous physical default-route
-metric. Cleanup also runs when the WireGuard adapter has already disconnected.
-Closing the app first cancels startup DNS renewal and pending software work,
-then waits for their routing locks before restoring routes. This also covers
-closing the window immediately after launch while DNS resolution is still busy.
-An upgrade migrates the complete pair of metric-5 bypass `/1` routes left by
-older versions on the normal gateway. Rules and settings stay saved for the
-next app launch. With restoration disabled, split-tunnel routes remain active.
+On a deliberate user close, existing application-managed route cleanup runs
+first. The app then stops and uninstalls **all** installed `WireGuardTunnel$`
+services, including tunnels created outside this app. If no tunnel services are
+installed, no elevation is requested for tunnel disconnect. The app saves final
+application state, authorizes an eligible staged update, and completes normal
+close only after it has verified that every targeted service is absent.
 
-After the app finishes closing, activating a full-tunnel configuration in
-WireGuard can take over internet routing again. A configuration that contains
-only selected `AllowedIPs` remains split-tunnel; closing this app does not
-change your original `.conf` file. A crash or forced termination can defer
-cleanup until the next app session.
+Enable **Restore normal routing when app exits** to release the physical network
+bypass `/1` routes and restore the previous physical default-route metric before
+tunnel disconnect. This preference controls route cleanup, not whether a
+deliberate user close disconnects tunnels. Cleanup also runs when the WireGuard
+adapter has already disconnected. Closing the app first cancels startup DNS
+renewal and pending software work, then waits for their routing locks before
+restoring routes. This also covers closing the window immediately after launch
+while DNS resolution is still busy. An upgrade migrates the complete pair of
+metric-5 bypass `/1` routes left by older versions on the normal gateway. Rules
+and settings stay saved for the next app launch. With restoration disabled,
+app-owned split-tunnel routes remain in place, but a successful user close still
+removes the tunnel services.
+
+If route cleanup, service enumeration, elevated helper launch, service stop, or
+verification fails, normal close and update authorization stop. The failure
+dialog lists the exact unresolved service names when targets remain and offers
+**Retry**, **Close anyway**, or Cancel. **Close anyway** must be separately
+confirmed; it closes without another cleanup attempt, does not authorize a
+staged update or mark cleanup successful, and retains any existing cleanup
+journal for reconciliation. Cancel keeps the app open.
+
+Installer-maintenance close preserves tunnels: it bypasses tunnel enumeration,
+stop operations, and the user-close journal. Other deliberate user closes do not
+inherit this exception.
+
+Before the first tunnel mutation, the app records the exact close targets and
+any pending Enable Now tunnel identity in a durable journal. After an
+interrupted deliberate close, the next startup reconciles only the recorded
+targets and any recorded pending Enable Now tunnel before automatic enable or
+route renewal, and before DNS, software, or update startup work. It does not
+stop an unrelated service first observed after the interruption. Unresolved
+reconciliation retains the journal and leaves those startup stages blocked.
+Task Manager termination, power loss, or a crash before a close request is
+outside this guarantee because no deliberate-close operation was recorded.
+
+After a successful close, activating a full-tunnel configuration in WireGuard
+can take over internet routing again. A configuration that contains only
+selected `AllowedIPs` remains split-tunnel; closing this app does not change
+your original `.conf` file.
+
+Offline tests do not prove live service removal, route restoration, updater
+handoff, or network restoration. They use fake service/process boundaries and
+temporary files; real elevated operations require separately authorized live
+validation.
 
 For applications such as Antigravity that check location during startup or
 sign-in, the software list alone cannot guarantee that the first request uses

@@ -14,6 +14,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.VisualBasic;
 using Microsoft.Win32;
+using WireguardSplitTunnel.Core.ConfigCheck;
 using WireguardSplitTunnel.Core.Models;
 using WireguardSplitTunnel.Core.Services;
 using WireguardSplitTunnel.Core.Updates;
@@ -38,8 +39,14 @@ public partial class MainWindow : Window
     private readonly IncrementalDnsRouteReconciler incrementalDnsRouteReconciler;
     private readonly IAppLogger logger;
     private readonly ApplicationCloseIntentTracker closeIntentTracker;
-    private readonly ApplicationCloseOrchestrator
-        applicationCloseOrchestrator;
+    private readonly IUpdateCloseParticipant updateCloseParticipant;
+    private readonly WpfApplicationCloseActions closeActions;
+    private readonly FileCloseDisconnectJournal closeDisconnectJournal;
+    private readonly CloseDisconnectCoordinator closeDisconnectCoordinator;
+    private readonly ApplicationCloseAttemptLifecycle applicationCloseAttemptLifecycle = new();
+    private ApplicationCloseOrchestrator? applicationCloseOrchestrator;
+    private Task<ApplicationCloseResult>? applicationCloseRunTask;
+    private bool applicationCloseAttemptLatched;
     private readonly StateStore stateStore;
     private readonly StateStore appliedStateStore;
     private readonly StateStore tempListStore;
@@ -47,11 +54,17 @@ public partial class MainWindow : Window
     private bool suppressSettingsEvents;
     private bool allowCloseWithoutRestore;
     private bool isWindowClosing;
+    private bool closeDisconnectStartupReconciliationActive = true;
+    private bool closeDisconnectStartupCloseDeferred;
+    private readonly ConfigCheckCoordinator configCheckCoordinator;
+    private readonly ConfigCheckStartupRecoveryCoordinator configCheckStartupRecoveryCoordinator;
+    private readonly EnableTunnelCoordinator enableTunnelCoordinator;
     private readonly bool runPostInstallSelfTestOnLoad;
     private readonly InstallStartupHandshake? installStartupHandshake;
     private readonly EventWaitHandle? installCommitEvent;
     private readonly SemaphoreSlim renewSemaphore = new(1, 1);
     private readonly SemaphoreSlim softwareApplySemaphore = new(1, 1);
+    private readonly SoftwareApplyCoordinator softwareApplyCoordinator;
     private CancellationTokenSource? softwareReapplyDebounceCts;
     private readonly object softwareReapplyGate = new();
     private CancellationTokenSource? monitorRefreshCts;
@@ -61,7 +74,7 @@ public partial class MainWindow : Window
     private int monitorRefreshInProgress;
     private int monitorRunGeneration;
     private int renewInProgress;
-    private volatile bool suppressAutoSoftwareReapply;
+    private volatile bool suppressAutoSoftwareReapply = true;
     private bool mode2RoutingWarningShownThisSession;
     private bool incrementalDomainStateSavePending;
     private const int BypassHalfDefaultMetric = BypassRouteLeaseService.HalfDefaultMetric;
@@ -77,7 +90,8 @@ public partial class MainWindow : Window
         UpdateStartupHealthContext? updateStartupHealthContext =
             null,
         InstallStartupHandshake? installStartupHandshake = null,
-        EventWaitHandle? installCommitEvent = null)
+        EventWaitHandle? installCommitEvent = null,
+        IEnableTunnelProcessFactory? enableTunnelProcessFactory = null)
     {
         this.runPostInstallSelfTestOnLoad = runPostInstallSelfTestOnLoad;
         this.installStartupHandshake = installStartupHandshake;
@@ -136,19 +150,37 @@ public partial class MainWindow : Window
         tempListStore = new StateStore(Path.Combine(dataDirectory, "temp-lists.json"));
         state = PrimaryAppStateLoader.Load(stateStore);
         InitializeWindowsUpdate();
-        var closeActions = new WpfApplicationCloseActions(
+        this.updateCloseParticipant = updateCloseParticipant
+            ?? NoOpUpdateCloseParticipant.Instance;
+        closeActions = new WpfApplicationCloseActions(
             softwareApplySemaphore,
             renewSemaphore,
             () => stateStore.Save(state));
-        applicationCloseOrchestrator =
-            new ApplicationCloseOrchestrator(
-                updateCloseParticipant
-                ?? NoOpUpdateCloseParticipant.Instance,
-                closeActions,
-                this.closeIntentTracker,
-                CreateApplicationCloseRequest(
-                    runPostInstallSelfTestOnLoad),
-                token => RestoreNormalRoutingOnExitAsync(token));
+        var tunnelProcessFactory = enableTunnelProcessFactory
+            ?? new WindowsEnableTunnelProcessFactory();
+        enableTunnelCoordinator = new EnableTunnelCoordinator(
+            renewSemaphore,
+            tunnelProcessFactory);
+        closeDisconnectJournal = new FileCloseDisconnectJournal(
+            Path.Combine(dataDirectory, "close-disconnect.json"));
+        closeDisconnectCoordinator = new CloseDisconnectCoordinator(
+            new RegistryWindowsTunnelServiceEnumerator(),
+            new WindowsElevatedTunnelStopAdapter(
+                tunnelProcessFactory,
+                ResolveWireguardExecutablePath),
+            closeDisconnectJournal,
+            enableTunnelCoordinator,
+            Guid.NewGuid,
+            new WindowsEnableTunnelProcessSettlementProbe());
+        softwareApplyCoordinator = new SoftwareApplyCoordinator(softwareApplySemaphore);
+        configCheckCoordinator = new ConfigCheckCoordinator(
+            softwareApplySemaphore,
+            renewSemaphore,
+            ResumeWindowCloseAfterConfigCheck);
+        configCheckStartupRecoveryCoordinator = new ConfigCheckStartupRecoveryCoordinator(
+            softwareApplySemaphore,
+            renewSemaphore,
+            ResumeWindowCloseAfterConfigCheck);
 
         Loaded += OnLoaded;
         Closing += OnWindowClosing;
@@ -174,6 +206,7 @@ public partial class MainWindow : Window
         AddCustomFolderButton.Click += OnAddCustomFolderClicked;
         RemoveCustomFolderButton.Click += OnRemoveCustomFolderClicked;
         EnableTunnelButton.Click += OnEnableTunnelClicked;
+        TestConfigButton.Click += OnTestConfigClicked;
         SaveTempButton.Click += OnSaveTempClicked;
         LoadTempButton.Click += OnLoadTempClicked;
         StartMonitorButton.Click += OnStartMonitorClicked;
@@ -204,9 +237,20 @@ public partial class MainWindow : Window
             + $"authorizationPresent={authorization is not null}, "
             + $"authorizationOutcome="
             + $"{authorization?.Outcome.ToString() ?? "none"}, "
-            + $"authorizationError="
-            + $"{authorization?.ErrorCode ?? "none"}.");
+            + $"authorizationError={authorization?.ErrorCode ?? "none"}, "
+            + $"{CloseDisconnectDiagnosticFormatter.Format(result.DisconnectResult)}.");
     }
+
+    private ApplicationCloseOrchestrator CreateApplicationCloseOrchestrator() =>
+        new(
+            updateCloseParticipant,
+            closeActions,
+            closeIntentTracker,
+            CreateApplicationCloseRequest(runPostInstallSelfTestOnLoad),
+            token => RestoreNormalRoutingOnExitAsync(token),
+            closeIntentTracker.Current == ApplicationCloseIntent.UserOrApplicationClose
+                ? closeDisconnectCoordinator
+                : null);
 
     private async void OnWindowClosing(object? sender, CancelEventArgs e)
     {
@@ -216,12 +260,48 @@ public partial class MainWindow : Window
         }
 
         e.Cancel = true;
-        if (isWindowClosing)
+        var configCheckCloseDeferred = configCheckCoordinator.TryDeferClose();
+        var startupRecoveryCloseDeferred = configCheckStartupRecoveryCoordinator.TryDeferClose();
+        var closeDisconnectStartupCloseDeferred = TryDeferCloseDisconnectStartup();
+        if (configCheckCloseDeferred || startupRecoveryCloseDeferred || closeDisconnectStartupCloseDeferred)
         {
+            isWindowClosing = true;
+            routingWorkCts.Cancel();
             return;
         }
 
+        if (isWindowClosing && applicationCloseAttemptLatched)
+        {
+            if (applicationCloseRunTask is not { } activeAttempt)
+            {
+                return;
+            }
+
+            var transitionToNonUserClose =
+                closeIntentTracker.Current != ApplicationCloseIntent.UserOrApplicationClose &&
+                activeAttempt.IsCompleted &&
+                (!activeAttempt.IsCompletedSuccessfully || !activeAttempt.Result.CanClose);
+            if (!transitionToNonUserClose)
+            {
+                try
+                {
+                    await activeAttempt;
+                }
+                catch
+                {
+                    // The owning handler observes the same task and presents its failure.
+                }
+
+                return;
+            }
+
+            // A modal-latched failed attempt has already settled. Take ownership for
+            // the non-user close; task identity makes the stale handler exit silently.
+            ReleaseApplicationCloseAttempt(activeAttempt);
+        }
+
         isWindowClosing = true;
+        applicationCloseAttemptLatched = true;
         routingWorkCts.Cancel();
         PrepareWindowsUpdateForClose();
         closeIntentTracker.ResolveNormalClose();
@@ -233,60 +313,192 @@ public partial class MainWindow : Window
         dnsCacheLearningCts.Cancel();
         monitorRefreshCts?.Cancel();
 
-        try
+        Task<ApplicationCloseResult>? runTask = null;
+        while (!allowCloseWithoutRestore)
         {
-            // Never let a stuck restore (unhealthy tunnel, hung route command,
-            // or a renew/apply still holding the routing semaphores) trap the
-            // GUI: cancel orchestration after 15s and force the window closed
-            // after 20s regardless.
-            using var closeTimeoutCts =
-                new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            await StopSoftwareLearningAsync().WaitAsync(closeTimeoutCts.Token);
-            var runTask = applicationCloseOrchestrator
-                .RunOnceAsync(closeTimeoutCts.Token);
-            var completedTask = await Task.WhenAny(
-                runTask,
-                Task.Delay(TimeSpan.FromSeconds(20)));
-            if (completedTask == runTask)
+            ApplicationCloseResult? result = null;
+            try
             {
-                var result = runTask.Result;
+                // Cancellation can stop cancellable route work, but neither timer
+                // may close the window or abandon an elevated enable/disconnect.
+                using var closeTimeoutCts =
+                    new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await StopSoftwareLearningAsync().WaitAsync(closeTimeoutCts.Token);
+                if (!ReferenceEquals(applicationCloseRunTask, runTask))
+                {
+                    return;
+                }
+
+                if (runTask is not null &&
+                    closeIntentTracker.Current == ApplicationCloseIntent.UserOrApplicationClose)
+                {
+                    // Only an explicit user Retry needs a direct release. A non-user
+                    // transition replaces its failed attempt inside the lifecycle.
+                    ReleaseApplicationCloseAttempt(runTask);
+                    applicationCloseAttemptLatched = true;
+                }
+
+                runTask = applicationCloseAttemptLifecycle.RunAsync(
+                    () => applicationCloseOrchestrator = CreateApplicationCloseOrchestrator(),
+                    closeIntentTracker,
+                    closeTimeoutCts.Token);
+                applicationCloseRunTask = runTask;
+                var completedTask = await Task.WhenAny(
+                    runTask,
+                    Task.Delay(TimeSpan.FromSeconds(20)));
+                if (completedTask != runTask)
+                {
+                    logger.Error(
+                        "Application close orchestration is still running; "
+                        + "window close remains blocked until cleanup finishes.");
+                }
+
+                // Always join the actual attempt after the diagnostic delay. A
+                // timeout is never permission to close or abandon service cleanup.
+                result = await runTask;
                 LogApplicationCloseResult(result);
             }
-            else
+            catch (Exception ex)
             {
                 logger.Error(
-                    "Application close orchestration timed out; "
-                    + "closing without waiting for route restore.");
+                    "Application close orchestration failed.",
+                    ex);
             }
-        }
-        catch (Exception ex)
-        {
-            logger.Error(
-                "Application close orchestration failed.",
-                ex);
-        }
-        finally
-        {
-            DisposeWindowsUpdate();
-            allowCloseWithoutRestore = true;
-            Close();
+
+            if (!ReferenceEquals(applicationCloseRunTask, runTask))
+            {
+                return;
+            }
+
+            if (result is null)
+            {
+                logger.Error("Application close returned no result; cleanup remains unresolved.");
+            }
+            else if (result.CanClose)
+            {
+                ReleaseApplicationCloseAttempt(runTask);
+                FinishWindowClose();
+                return;
+            }
+
+            if (closeIntentTracker.Current != ApplicationCloseIntent.UserOrApplicationClose)
+            {
+                // A non-user close consumes the failed user attempt without presenting
+                // recovery choices. The next loop performs its explicit transition.
+                continue;
+            }
+
+            var serviceNames = FormatCloseDisconnectServiceNames(result?.DisconnectResult);
+            var answer = MessageBox.Show(
+                this,
+                "WireGuard cleanup did not complete; normal networking was not restored. "
+                + "Normal networking may still use WireGuard.\n\n"
+                + "Unresolved WireGuard services:\n"
+                + serviceNames
+                + "\n\nYes = Retry cleanup. No = Close anyway. Cancel = Keep this guarded window open.",
+                "Wireguard Split Tunnel - Cleanup incomplete",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Warning,
+                MessageBoxResult.Cancel);
+
+            if (!ReferenceEquals(applicationCloseRunTask, runTask))
+            {
+                return;
+            }
+
+            if (closeIntentTracker.Current != ApplicationCloseIntent.UserOrApplicationClose)
+            {
+                // Maintenance may arrive through the modal message pump. Ignore the
+                // stale user choice and continue directly into the non-user close.
+                continue;
+            }
+
+            if (answer == MessageBoxResult.Yes)
+            {
+                // Keep the consumed attempt latched until the next loop can replace it.
+                continue;
+            }
+
+            if (answer == MessageBoxResult.No)
+            {
+                var closeAnyway = MessageBox.Show(
+                    this,
+                    "Close anyway without restoring normal networking?\n\n"
+                    + "WireGuard may still route traffic; no staged update installs; "
+                    + "cleanup is not marked successful.",
+                    "Wireguard Split Tunnel - Close without cleanup",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No);
+                if (!ReferenceEquals(applicationCloseRunTask, runTask))
+                {
+                    return;
+                }
+
+                if (closeIntentTracker.Current != ApplicationCloseIntent.UserOrApplicationClose)
+                {
+                    continue;
+                }
+
+                if (closeAnyway == MessageBoxResult.Yes)
+                {
+                    // Deliberately do not complete the journal, save final state,
+                    // disconnect again, or authorize a staged update on this path.
+                    ReleaseApplicationCloseAttempt(runTask);
+                    FinishWindowClose();
+                    return;
+                }
+            }
+
+            // Cancel and a declined second warning release only after every dialog
+            // is dismissed. Mutation guards remain held for the next fresh close.
+            ReleaseApplicationCloseAttempt(runTask);
+            return;
         }
     }
+
+    private void ReleaseApplicationCloseAttempt(Task<ApplicationCloseResult>? attempt)
+    {
+        if (attempt is not null)
+        {
+            applicationCloseAttemptLifecycle.Release(attempt);
+        }
+
+        applicationCloseRunTask = null;
+        applicationCloseAttemptLatched = false;
+    }
+
+    private void FinishWindowClose()
+    {
+        if (allowCloseWithoutRestore) return;
+        DisposeWindowsUpdate();
+        allowCloseWithoutRestore = true;
+        Close();
+    }
+
+    private void ResumeWindowCloseAfterConfigCheck()
+    {
+        if (allowCloseWithoutRestore)
+        {
+            return;
+        }
+
+        isWindowClosing = false;
+        OnWindowClosing(this, new CancelEventArgs());
+    }
+
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         suppressAutoSoftwareReapply = true;
         var installCommitted = installStartupHandshake is null;
+        var startupRecoveryCompleted = false;
+        var closeDisconnectReconciliationCompleted = false;
         try
         {
             logger.Info("Window loaded. Starting initialization.");
 
             NormalizeUnifiedGlobalModeOnLoad();
             LoadSettingsToUi();
-
-            var isConnected = detector.TryGetActiveInterface(out var interfaceName);
-            TunnelStatusText.Text = isConnected
-                ? $"Tunnel: Connected ({interfaceName})"
-                : "Tunnel: Disconnected";
 
             if (installStartupHandshake is not null)
             {
@@ -298,6 +510,34 @@ public partial class MainWindow : Window
                 await WaitForInstallCommitAsync();
                 installCommitted = true;
             }
+
+            try
+            {
+                await RecoverConfigCheckTransactionsOnStartupAsync();
+                startupRecoveryCompleted = true;
+            }
+            catch (Exception ex)
+            {
+                configCheckStartupRecoveryCoordinator.CompletePending();
+                CompleteCloseDisconnectStartupReconciliation();
+                logger.Error(
+                    "Config-check startup recovery is incomplete. Automatic enable, route renewal, DNS learning, and software reapply are paused. Preserve the config-check journals and restart the app to retry; review the recovery files before manual changes.",
+                    ex);
+                if (configCheckStartupRecoveryCoordinator.CloseWasRequested) return;
+                TunnelStatusText.Text = "Tunnel: Recovery blocked; preserve journals, review app.log, restart to retry";
+                return;
+            }
+
+            // Reconcile interrupted deliberate-close debt before detecting or
+            // changing any interface, route, DNS/software state, or update state.
+            if (!await ReconcileCloseDisconnectOnStartupAsync()) return;
+            closeDisconnectReconciliationCompleted = true;
+            if (isWindowClosing) return;
+            if (configCheckStartupRecoveryCoordinator.CloseWasRequested) return;
+            var isConnected = detector.TryGetActiveInterface(out var interfaceName);
+            TunnelStatusText.Text = isConnected
+                ? $"Tunnel: Connected ({interfaceName})"
+                : "Tunnel: Disconnected";
 
             if (!isConnected && state.AutoEnableTunnel)
             {
@@ -320,7 +560,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            configCheckStartupRecoveryCoordinator.CompletePending();
+            CompleteCloseDisconnectStartupReconciliation();
             logger.Error("Unhandled startup exception.", ex);
+            if (configCheckStartupRecoveryCoordinator.CloseWasRequested) return;
             TunnelStatusText.Text = "Tunnel: Startup renew failed";
             if (installStartupHandshake is null)
             {
@@ -332,20 +575,112 @@ public partial class MainWindow : Window
         }
         finally
         {
-            suppressAutoSoftwareReapply = false;
-            if (installCommitted && !isWindowClosing)
+            // A blocked recovery/reconciliation or requested close remains
+            // fail-closed for network-change-triggered software work below.
+            suppressAutoSoftwareReapply = !startupRecoveryCompleted ||
+                !closeDisconnectReconciliationCompleted ||
+                configCheckStartupRecoveryCoordinator.CloseWasRequested;
+            if (installCommitted && startupRecoveryCompleted && !isWindowClosing &&
+                closeDisconnectReconciliationCompleted &&
+                !configCheckStartupRecoveryCoordinator.CloseWasRequested)
             {
                 dnsCacheLearningTimer.Start();
                 StartSoftwareLearning();
-                // The WireGuard service outlives the app, so the tunnel may
-                // already be up when the app starts. No network-change event
-                // fires in that case and enabled software rules would never
-                // be re-applied. Kick one re-apply through the normal
-                // debounced path so startup always restores software split
-                // tunneling.
+                // A service enabled after an earlier close, or left by an
+                // interrupted close, may already be up without a network-change
+                // event to trigger the normal debounced software-rule restore.
                 ScheduleSoftwareReapply("startup");
             }
         }
+    }
+
+    private async Task<bool> ReconcileCloseDisconnectOnStartupAsync()
+    {
+        CloseDisconnectResult? result = null;
+        try
+        {
+            await closeActions.RunRoutingExclusiveAsync(
+                async _ =>
+                {
+                    result = await closeDisconnectCoordinator.ReconcileAsync(CancellationToken.None);
+                },
+                CancellationToken.None);
+            if (result is { Success: true })
+            {
+                logger.Info("Close-disconnect startup reconciliation completed.");
+                return true;
+            }
+
+            var unresolvedServiceNames = result?.UnresolvedTargets
+                .Select(target => target.ServiceName)
+                .ToArray() ?? [];
+            logger.Error(
+                "Close-disconnect startup reconciliation is unresolved. "
+                + "Automatic enable, route renewal, DNS/software work, and update startup are blocked.");
+            ShowCloseDisconnectStartupFailure(
+                unresolvedServiceNames.Length == 0
+                    ? FormatCloseDisconnectServiceNames(result)
+                    : string.Join(Environment.NewLine, unresolvedServiceNames));
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger.Error(
+                "Close-disconnect startup reconciliation failed. Startup routing and update work remain blocked.",
+                ex);
+            ShowCloseDisconnectStartupFailure(
+                FormatCloseDisconnectServiceNames(result));
+            return false;
+        }
+        finally
+        {
+            CompleteCloseDisconnectStartupReconciliation();
+        }
+    }
+
+    private void ShowCloseDisconnectStartupFailure(string serviceNames)
+    {
+        if (isWindowClosing) return;
+        TunnelStatusText.Text = "Tunnel: Close cleanup unresolved; restart to retry";
+        MessageBox.Show(
+            this,
+            "An interrupted WireGuard close cleanup is unresolved. Startup changes are blocked; "
+            + "normal networking may still use WireGuard.\n\n"
+            + "Unresolved WireGuard services:\n"
+            + serviceNames
+            + "\n\nThe close-disconnect journal was retained. Restart to retry.",
+            "Wireguard Split Tunnel - Close cleanup unresolved",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+    }
+
+    private bool TryDeferCloseDisconnectStartup()
+    {
+        if (!closeDisconnectStartupReconciliationActive) return false;
+        closeDisconnectStartupCloseDeferred = true;
+        return true;
+    }
+
+    private void CompleteCloseDisconnectStartupReconciliation()
+    {
+        if (!closeDisconnectStartupReconciliationActive) return;
+        closeDisconnectStartupReconciliationActive = false;
+        if (!closeDisconnectStartupCloseDeferred) return;
+        closeDisconnectStartupCloseDeferred = false;
+        ResumeWindowCloseAfterConfigCheck();
+    }
+
+    private static string FormatCloseDisconnectServiceNames(
+        CloseDisconnectResult? result)
+    {
+        var names = result?.UnresolvedTargets
+            .Select(target => target.ServiceName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray() ?? [];
+        return names.Length == 0
+            ? "(unresolved service names unavailable; cleanup remains pending)"
+            : string.Join(Environment.NewLine, names);
     }
 
     private async Task WaitForInstallCommitAsync()
@@ -464,6 +799,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (configCheckCoordinator.IsActive)
+        {
+            return;
+        }
+
         if (!await renewSemaphore.WaitAsync(0))
         {
             return;
@@ -472,6 +812,11 @@ public partial class MainWindow : Window
         Interlocked.Exchange(ref renewInProgress, 1);
         try
         {
+            if (configCheckCoordinator.IsActive)
+            {
+                return;
+            }
+
             if (!detector.TryGetActiveInterface(out _))
             {
                 return;
@@ -481,7 +826,17 @@ public partial class MainWindow : Window
                 state,
                 async (toAdd, token) =>
                 {
+                    if (configCheckCoordinator.IsActive)
+                    {
+                        throw new OperationCanceledException("Config check started before incremental route application.");
+                    }
+
                     await ApplyRoutesViaCurrentWireGuardAsync(toAdd, [], token);
+                    if (configCheckCoordinator.IsActive)
+                    {
+                        throw new OperationCanceledException("Config check started before incremental route healing.");
+                    }
+
                     await HealMissingDomainRoutesAsync(toAdd.ToList(), token);
                 },
                 dnsCacheLearningCts.Token);
@@ -507,7 +862,9 @@ public partial class MainWindow : Window
                     $"Incremental DNS learning added {result.AddedRouteCount} IPv4 routes from {result.LearnedIpCount} learned IPs.");
             }
         }
-        catch (OperationCanceledException) when (dnsCacheLearningCts.IsCancellationRequested)
+        catch (OperationCanceledException) when (
+            dnsCacheLearningCts.IsCancellationRequested
+            || configCheckCoordinator.IsActive)
         {
             logger.Info("Incremental DNS learning canceled.");
         }
@@ -724,16 +1081,22 @@ public partial class MainWindow : Window
         return $"{directory}\\...\\{fileName}";
     }
 
+    private bool CanApplySoftwarePolicies() =>
+        !isWindowClosing && !configCheckCoordinator.IsActive && !suppressAutoSoftwareReapply;
+
     private void ScheduleSoftwareReapply(string reason)
     {
-        if (isWindowClosing)
+        if (!CanApplySoftwarePolicies())
         {
-            return;
-        }
+            if (suppressAutoSoftwareReapply)
+            {
+                logger.Info($"Skip auto software rules re-apply ({reason}): startup routing is still initializing or recovery is blocked.");
+            }
+            else if (configCheckCoordinator.IsActive)
+            {
+                logger.Info($"Skip auto software rules re-apply ({reason}): config check is active.");
+            }
 
-        if (suppressAutoSoftwareReapply)
-        {
-            logger.Info($"Skip auto software rules re-apply ({reason}): startup routing is still initializing.");
             return;
         }
 
@@ -767,7 +1130,7 @@ public partial class MainWindow : Window
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(3), nextCts.Token);
-                if (nextCts.IsCancellationRequested || isWindowClosing)
+                if (nextCts.IsCancellationRequested || !CanApplySoftwarePolicies())
                 {
                     return;
                 }
@@ -776,7 +1139,7 @@ public partial class MainWindow : Window
                 {
                     logger.Info($"Auto software rules re-apply delayed ({reason}): domain renew is in progress.");
                     await WaitForDomainRenewIdleAsync(nextCts.Token);
-                    if (nextCts.IsCancellationRequested || isWindowClosing)
+                    if (nextCts.IsCancellationRequested || !CanApplySoftwarePolicies())
                     {
                         return;
                     }
@@ -1003,6 +1366,12 @@ public partial class MainWindow : Window
 
     private void TryEnableSelectedTunnel(bool autoTriggered)
     {
+        if (isWindowClosing || configCheckCoordinator.IsActive ||
+            configCheckStartupRecoveryCoordinator.IsTunnelEnableBlocked)
+        {
+            return;
+        }
+
         var selectedPath = (TunnelConfigCombo.SelectedValue as string) ?? state.SelectedTunnelConfigPath;
         if (string.IsNullOrWhiteSpace(selectedPath))
         {
@@ -1020,14 +1389,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Never hand wireguard.exe a config whose AllowedIPs can trigger the
-        // Windows root-tunnel kill switch (0.0.0.0/0 or ::/0 blocks ALL
-        // untunneled traffic, LAN included). Install from a sanitized derived
-        // copy instead; the user's original file is never modified.
-        selectedPath = WireguardAllowedIpsSanitizer.EnsureSanitizedConfigFile(
-            selectedPath,
-            WireguardAllowedIpsSanitizer.GetDefaultDerivedConfigDirectory());
-
         var wireguardExePath = ResolveWireguardExecutablePath();
         if (string.IsNullOrWhiteSpace(wireguardExePath))
         {
@@ -1037,36 +1398,47 @@ public partial class MainWindow : Window
 
         try
         {
-            // Enable Now means "run exactly the tunnel I selected": uninstall
-            // every installed WireGuard tunnel service first (a stale tunnel
-            // like nordusa1 would otherwise keep running and get adopted),
-            // then install the selected config.
-            var installedTunnels = WindowsTunnelServiceDiscovery.ListInstalledTunnelNames();
-            if (installedTunnels.Count > 0)
-            {
-                logger.Info($"Enable Now: uninstalling existing tunnel service(s): {string.Join(", ", installedTunnels)}");
-            }
+            _ = TrackEnableTunnelProcessAsync(
+                () =>
+                {
+                    // Select and validate the derived path only after the queued
+                    // operation owns the routing gate and rechecks recovery. This
+                    // prevents repair from replacing the source between sanitation
+                    // and installation. Never fall back to the original on failure.
+                    var installPath = WireguardAllowedIpsSanitizer.EnsureSanitizedConfigFile(
+                        selectedPath,
+                        WireguardAllowedIpsSanitizer.GetDefaultDerivedConfigDirectory());
 
-            // cmd /c strips the FIRST and LAST quote of the whole remainder
-            // when the chain contains '&' and multiple quoted paths, which
-            // breaks the first command ("C:\Program" not recognized). Wrap
-            // the entire chain in one extra pair of quotes so cmd strips
-            // that sacrificial pair and leaves every inner quote intact.
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
-                Arguments = "/c \"" + WindowsEnableTunnelCommandBuilder.BuildArguments(
-                    wireguardExePath,
-                    selectedPath,
-                    installedTunnels) + "\"",
-                UseShellExecute = true,
-                Verb = "runas",
-                WindowStyle = ProcessWindowStyle.Hidden
-            };
+                    // Enable Now means "run exactly the tunnel I selected": uninstall
+                    // every installed WireGuard tunnel service first (a stale tunnel
+                    // like nordusa1 would otherwise keep running and get adopted),
+                    // then install the selected config. Discover services only after
+                    // this enable owns the routing gate so queued commands stay fresh.
+                    var installedTunnels = WindowsTunnelServiceDiscovery.ListInstalledTunnelNames();
+                    if (installedTunnels.Count > 0)
+                    {
+                        logger.Info($"Enable Now: uninstalling existing tunnel service(s): {string.Join(", ", installedTunnels)}");
+                    }
 
-            Process.Start(startInfo);
-            TunnelStatusText.Text = $"Tunnel: Enabling ({WireguardConfigCatalog.GetTunnelName(selectedPath)})";
-            _ = AutoRenewAfterEnableTunnelAsync();
+                    // cmd /c strips the FIRST and LAST quote of the whole remainder
+                    // when the chain contains '&' and multiple quoted paths, which
+                    // breaks the first command ("C:\Program" not recognized). Wrap
+                    // the entire chain in one extra pair of quotes so cmd strips
+                    // that sacrificial pair and leaves every inner quote intact.
+                    return new ProcessStartInfo
+                    {
+                        FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe"),
+                        Arguments = "/c \"" + WindowsEnableTunnelCommandBuilder.BuildArguments(
+                            wireguardExePath,
+                            installPath,
+                            installedTunnels) + "\"",
+                        UseShellExecute = true,
+                        Verb = "runas",
+                        WindowStyle = ProcessWindowStyle.Hidden
+                    };
+                },
+                selectedPath,
+                autoTriggered);
         }
         catch (Win32Exception)
         {
@@ -1092,26 +1464,68 @@ public partial class MainWindow : Window
 
         return candidates.FirstOrDefault(File.Exists);
     }
-    private async Task AutoRenewAfterEnableTunnelAsync()
+    private async Task TrackEnableTunnelProcessAsync(
+        Func<ProcessStartInfo> startInfoFactory,
+        string selectedPath,
+        bool autoTriggered)
     {
         try
         {
-            await Task.Delay(3000);
-            var renewed = await RenewDomainRoutesLockedAsync(showMessage: false, fromStartup: false);
-            if (renewed)
+            await enableTunnelCoordinator.RunAsync(
+                startInfoFactory,
+                () => !isWindowClosing && !configCheckCoordinator.IsActive &&
+                    !configCheckStartupRecoveryCoordinator.IsTunnelEnableBlocked,
+                () =>
+                {
+                    if (!isWindowClosing)
+                    {
+                        TunnelStatusText.Text =
+                            $"Tunnel: Enabling ({WireguardConfigCatalog.GetTunnelName(selectedPath)})";
+                    }
+                },
+                async cancellationToken =>
+                {
+                    await Task.Delay(3000, cancellationToken);
+                    // The enable coordinator already owns renewSemaphore. Call
+                    // the core renewal directly instead of recursively waiting.
+                    var renewed = await RenewDomainRoutesAsync(
+                        showMessage: false,
+                        fromStartup: false,
+                        cancellationToken);
+                    if (isWindowClosing) return;
+
+                    if (renewed)
+                    {
+                        TunnelStatusText.Text = "Tunnel: Connected (Domain IP auto-renewed after enable)";
+                        logger.Info("Auto renew after enable tunnel completed successfully.");
+                    }
+                    else
+                    {
+                        logger.Info("Auto renew after enable tunnel skipped.");
+                    }
+                },
+                routingWorkCts.Token,
+                selectedTunnel: WindowsTunnelServiceIdentity.FromTunnelName(
+                    WireguardConfigCatalog.GetTunnelName(selectedPath)));
+        }
+        catch (OperationCanceledException) when (routingWorkCts.IsCancellationRequested)
+        {
+            logger.Info("Enable tunnel follow-on renewal canceled for application close.");
+        }
+        catch (Win32Exception)
+        {
+            if (!autoTriggered && !isWindowClosing)
             {
-                TunnelStatusText.Text = "Tunnel: Connected (Domain IP auto-renewed after enable)";
-                logger.Info("Auto renew after enable tunnel completed successfully.");
-            }
-            else
-            {
-                logger.Info("Auto renew after enable tunnel skipped.");
+                MessageBox.Show(this, "WireGuard enable was canceled.", "Wireguard Split Tunnel");
             }
         }
         catch (Exception ex)
         {
-            logger.Error("Auto renew after enable tunnel failed.", ex);
-            TunnelStatusText.Text = "Tunnel: Auto-renew after enable failed";
+            logger.Error("Failed to enable selected tunnel.", ex);
+            if (!isWindowClosing)
+            {
+                MessageBox.Show(this, $"Failed to enable tunnel: {ex.Message}", "Wireguard Split Tunnel");
+            }
         }
     }
 
@@ -1343,6 +1757,11 @@ public partial class MainWindow : Window
     }
     private async Task<bool> RenewDomainRoutesLockedAsync(bool showMessage, bool fromStartup)
     {
+        if (configCheckCoordinator.IsActive)
+        {
+            return false;
+        }
+
         var cancellationToken = routingWorkCts.Token;
         try
         {
@@ -1356,6 +1775,11 @@ public partial class MainWindow : Window
         try
         {
             if (isWindowClosing)
+            {
+                return false;
+            }
+
+            if (configCheckCoordinator.IsActive)
             {
                 return false;
             }
@@ -1438,6 +1862,8 @@ public partial class MainWindow : Window
 
     private async Task<bool> RenewDomainRoutesAsync(bool showMessage, bool fromStartup, CancellationToken cancellationToken)
     {
+        // Callers must hold renewSemaphore. Enable uses the same core method
+        // while its process-lifetime gate is held, avoiding recursive acquisition.
         if (!await WaitForWireguardInterfaceAsync(TimeSpan.FromSeconds(20), cancellationToken))
         {
             if (showMessage)
@@ -2499,112 +2925,111 @@ public partial class MainWindow : Window
         cancellationToken = linked.Token;
         try
         {
-            await softwareApplySemaphore.WaitAsync(cancellationToken);
+            var applied = await softwareApplyCoordinator.RunAsync(
+                CanApplySoftwarePolicies,
+                ApplyLockedAsync,
+                cancellationToken);
+            if (!applied)
+            {
+                logger.Info($"Software apply skipped ({triggerReason}): close, config check, or startup recovery blocks software changes.");
+            }
         }
         catch (OperationCanceledException) when (routingWorkCts.IsCancellationRequested)
         {
-            return;
+            logger.Info("Software apply canceled for application close.");
         }
-        Interlocked.Exchange(ref softwareApplyInProgress, 1);
-        try
+        return;
+
+        async Task ApplyLockedAsync(CancellationToken applyToken)
         {
-            if (isWindowClosing)
-            {
-                logger.Info(
-                    "Software apply skipped: "
-                    + "application close is in progress.");
-                return;
-            }
-
-            if (showMessage)
-            {
-                ApplySoftwareButton.IsEnabled = false;
-            }
-
-            SoftwareSelfTestButton.IsEnabled = false;
-
-            var selectedSoftwareInterface = SelectedSoftwareInterface();
-            if (selectedSoftwareInterface is null)
+            Interlocked.Exchange(ref softwareApplyInProgress, 1);
+            try
             {
                 if (showMessage)
                 {
-                    MessageBox.Show(this, "WireGuard interface not detected. Enable tunnel first.", "Wireguard Split Tunnel");
+                    ApplySoftwareButton.IsEnabled = false;
                 }
 
-                logger.Info($"Software apply skipped ({triggerReason}): WireGuard interface not detected.");
-                return;
-            }
+                SoftwareSelfTestButton.IsEnabled = false;
 
-            var wireguardInterfaceName = selectedSoftwareInterface.Name;
-            var repairResult = SoftwareRulePathRepair.RepairEnabledRulePaths(state, softwareExecutableLocator);
+                var selectedSoftwareInterface = SelectedSoftwareInterface();
+                if (selectedSoftwareInterface is null)
+                {
+                    if (showMessage)
+                    {
+                        MessageBox.Show(this, "WireGuard interface not detected. Enable tunnel first.", "Wireguard Split Tunnel");
+                    }
 
-            stateStore.Save(state);
+                    logger.Info($"Software apply skipped ({triggerReason}): WireGuard interface not detected.");
+                    return;
+                }
 
-            var effectiveRules = (state.SoftwareRules ?? [])
-                .Where(rule => rule.Enabled)
-                .ToList();
+                var wireguardInterfaceName = selectedSoftwareInterface.Name;
+                var repairResult = SoftwareRulePathRepair.RepairEnabledRulePaths(state, softwareExecutableLocator);
 
-            await EnsureSoftwareRoutingPreparedAsync(wireguardInterfaceName, effectiveRules.Count, cancellationToken);
-            var routingCompatibility = EvaluateRoutingCompatibility(wireguardInterfaceName, effectiveRules.Count);
-            if (routingCompatibility.Status != RoutingStatus.Pass)
-            {
-                logger.Info($"Software apply routing status ({triggerReason}): {routingCompatibility.Status}. reason={routingCompatibility.Reason}");
-                NotifyRoutingCompatibilityIfNeeded(routingCompatibility, showMessage);
-            }
+                stateStore.Save(state);
 
-            await softwarePolicyService.ApplyAsync(
-                wireguardInterfaceName,
-                effectiveRules,
-                GetUnifiedGlobalMode(),
-                cancellationToken);
+                var effectiveRules = (state.SoftwareRules ?? [])
+                    .Where(rule => rule.Enabled)
+                    .ToList();
 
-            var verification = await VerifySoftwareRulesAppliedAsync(effectiveRules).WaitAsync(cancellationToken);
-            if (!verification.Verified && !verification.Unknown)
-            {
-                logger.Info($"Software apply verification mismatch ({triggerReason}). Retrying once. detail={verification.Detail}");
-                await Task.Delay(500, cancellationToken);
+                await EnsureSoftwareRoutingPreparedAsync(wireguardInterfaceName, effectiveRules.Count, applyToken);
+                var routingCompatibility = EvaluateRoutingCompatibility(wireguardInterfaceName, effectiveRules.Count);
+                if (routingCompatibility.Status != RoutingStatus.Pass)
+                {
+                    logger.Info($"Software apply routing status ({triggerReason}): {routingCompatibility.Status}. reason={routingCompatibility.Reason}");
+                    NotifyRoutingCompatibilityIfNeeded(routingCompatibility, showMessage);
+                }
+
                 await softwarePolicyService.ApplyAsync(
                     wireguardInterfaceName,
                     effectiveRules,
                     GetUnifiedGlobalMode(),
-                    cancellationToken);
-                verification = await VerifySoftwareRulesAppliedAsync(effectiveRules).WaitAsync(cancellationToken);
-            }
+                    applyToken);
 
-            var unresolvedText = repairResult.UnresolvedProcessNames.Count == 0
-                ? ""
-                : $"\nUnresolved path skipped ({repairResult.UnresolvedProcessNames.Count}): {string.Join(", ", repairResult.UnresolvedProcessNames.Distinct(StringComparer.OrdinalIgnoreCase))}";
-            var verificationText = $"\nVerification: {verification.Detail}";
-            var routingText = routingCompatibility.Status == RoutingStatus.Pass
-                ? "\nRouting configuration: PASS (packet egress not verified)"
-                : $"\nRouting: WARNING ({routingCompatibility.Reason})";
+                var verification = await VerifySoftwareRulesAppliedAsync(effectiveRules).WaitAsync(applyToken);
+                if (!verification.Verified && !verification.Unknown)
+                {
+                    logger.Info($"Software apply verification mismatch ({triggerReason}). Retrying once. detail={verification.Detail}");
+                    await Task.Delay(500, applyToken);
+                    await softwarePolicyService.ApplyAsync(
+                        wireguardInterfaceName,
+                        effectiveRules,
+                        GetUnifiedGlobalMode(),
+                        applyToken);
+                    verification = await VerifySoftwareRulesAppliedAsync(effectiveRules).WaitAsync(applyToken);
+                }
 
-            if (showMessage)
-            {
-                MessageBox.Show(this,
-                    $"Software apply completed ({triggerReason}). Enabled: {effectiveRules.Count}, auto-added paths: {repairResult.Added}, auto-updated paths: {repairResult.Updated}.{unresolvedText}{verificationText}{routingText}\n(Requires Administrator approval)",
-                    "Wireguard Split Tunnel");
-            }
+                var unresolvedText = repairResult.UnresolvedProcessNames.Count == 0
+                    ? ""
+                    : $"\nUnresolved path skipped ({repairResult.UnresolvedProcessNames.Count}): {string.Join(", ", repairResult.UnresolvedProcessNames.Distinct(StringComparer.OrdinalIgnoreCase))}";
+                var verificationText = $"\nVerification: {verification.Detail}";
+                var routingText = routingCompatibility.Status == RoutingStatus.Pass
+                    ? "\nRouting configuration: PASS (packet egress not verified)"
+                    : $"\nRouting: WARNING ({routingCompatibility.Reason})";
 
-            if (!verification.Verified && !verification.Unknown)
-            {
-                logger.Error($"Software apply finished but verification failed ({triggerReason}). {verification.Detail}");
+                if (showMessage)
+                {
+                    MessageBox.Show(this,
+                        $"Software apply completed ({triggerReason}). Enabled: {effectiveRules.Count}, auto-added paths: {repairResult.Added}, auto-updated paths: {repairResult.Updated}.{unresolvedText}{verificationText}{routingText}\n(Requires Administrator approval)",
+                        "Wireguard Split Tunnel");
+                }
+
+                if (!verification.Verified && !verification.Unknown)
+                {
+                    logger.Error($"Software apply finished but verification failed ({triggerReason}). {verification.Detail}");
+                }
+                else
+                {
+                    logger.Info($"Software apply completed ({triggerReason}). enabled={effectiveRules.Count}, autoAdded={repairResult.Added}, autoUpdated={repairResult.Updated}, unresolved={repairResult.UnresolvedProcessNames.Count}, verify={(verification.Verified ? "ok" : "unknown")}.");
+                }
             }
-            else
+            finally
             {
-                logger.Info($"Software apply completed ({triggerReason}). enabled={effectiveRules.Count}, autoAdded={repairResult.Added}, autoUpdated={repairResult.Updated}, unresolved={repairResult.UnresolvedProcessNames.Count}, verify={(verification.Verified ? "ok" : "unknown")}.");
+                Interlocked.Exchange(ref softwareApplyInProgress, 0);
+                ApplySoftwareButton.IsEnabled = true;
+                SoftwareSelfTestButton.IsEnabled = true;
             }
-        }
-        catch (OperationCanceledException) when (routingWorkCts.IsCancellationRequested)
-        {
-            logger.Info("Software apply canceled for application close; routing gate released for restore.");
-        }
-        finally
-        {
-            Interlocked.Exchange(ref softwareApplyInProgress, 0);
-            ApplySoftwareButton.IsEnabled = true;
-            SoftwareSelfTestButton.IsEnabled = true;
-            softwareApplySemaphore.Release();
         }
     }
 

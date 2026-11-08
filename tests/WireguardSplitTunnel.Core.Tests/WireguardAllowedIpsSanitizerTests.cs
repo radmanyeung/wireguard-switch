@@ -104,6 +104,21 @@ public sealed class WireguardAllowedIpsSanitizerTests
     }
 
     [Fact]
+    public void EnsureSanitizedConfigFile_DerivedFailure_ThrowsInsteadOfFallingBackToSource()
+    {
+        var directory = CreateTempDirectory();
+        var source = Path.Combine(directory, "nordusa1.conf");
+        File.WriteAllText(source, "[Peer]\nAllowedIPs = 0.0.0.0/0\n");
+        var derivedDirectory = Path.Combine(directory, "not-a-directory");
+        File.WriteAllText(derivedDirectory, "blocks derived directory creation");
+
+        var act = () => WireguardAllowedIpsSanitizer.EnsureSanitizedConfigFile(source, derivedDirectory);
+
+        act.Should().Throw<IOException>();
+        File.ReadAllText(source).Should().Contain("0.0.0.0/0");
+    }
+
+    [Fact]
     public void EnsureSanitizedConfigFile_DpapiConfig_PassesThrough()
     {
         var result = WireguardAllowedIpsSanitizer.EnsureSanitizedConfigFile(
@@ -114,12 +129,15 @@ public sealed class WireguardAllowedIpsSanitizerTests
     }
 
     [Fact]
-    public void EnsureSanitizedConfigFile_MissingFile_PassesThrough()
+    public void EnsureSanitizedConfigFile_MissingPlaintextFile_ThrowsInsteadOfPassingThrough()
     {
         var missing = Path.Combine(CreateTempDirectory(), "missing.conf");
 
-        WireguardAllowedIpsSanitizer.EnsureSanitizedConfigFile(missing, CreateTempDirectory())
-            .Should().Be(missing);
+        var act = () => WireguardAllowedIpsSanitizer.EnsureSanitizedConfigFile(
+            missing,
+            CreateTempDirectory());
+
+        act.Should().Throw<FileNotFoundException>();
     }
 
     private static string CreateTempDirectory()
