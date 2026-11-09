@@ -373,10 +373,19 @@ public sealed class WindowsConfigCheckAdapterContractTests : IDisposable
         var payload = Path.Combine(privateRoot, "original.bin");
         var sentinel = new byte[] { 9, 8, 7 };
         File.WriteAllBytes(outside, sentinel);
-        if (!TryCreateFileLink(payload, outside)) File.WriteAllBytes(payload, sentinel);
+        var linkCreated = TryCreateFileLink(payload, outside);
+        if (!linkCreated) File.WriteAllBytes(payload, sentinel);
 
-        await FluentActions.Awaiting(() => native.WritePrivateFileAsync(payload, [1, 2, 3], CancellationToken.None))
-            .Should().ThrowAsync<IOException>();
+        var assertion = FluentActions.Awaiting(
+            () => native.WritePrivateFileAsync(payload, [1, 2, 3], CancellationToken.None)).Should();
+        if (linkCreated)
+        {
+            await assertion.ThrowAsync<InvalidDataException>();
+        }
+        else
+        {
+            await assertion.ThrowAsync<IOException>();
+        }
 
         File.ReadAllBytes(outside).Should().Equal(sentinel);
         File.ReadAllBytes(payload).Should().Equal(sentinel);
@@ -391,11 +400,19 @@ public sealed class WindowsConfigCheckAdapterContractTests : IDisposable
         var sentinel = new byte[] { 9, 8, 7 };
         File.WriteAllBytes(outside, sentinel);
         var stage = Path.Combine(privateRoot, WindowsConfigCheckAdapter.SessionJournalName + ".tmp");
-        if (!TryCreateFileLink(stage, outside)) File.WriteAllBytes(stage, sentinel);
+        var linkCreated = TryCreateFileLink(stage, outside);
+        if (!linkCreated) File.WriteAllBytes(stage, sentinel);
 
-        await FluentActions.Awaiting(() => native.WriteJournalAsync(
-                privateRoot, WindowsConfigCheckAdapter.SessionJournalName, "{}", CancellationToken.None))
-            .Should().ThrowAsync<IOException>();
+        var assertion = FluentActions.Awaiting(() => native.WriteJournalAsync(
+                privateRoot, WindowsConfigCheckAdapter.SessionJournalName, "{}", CancellationToken.None)).Should();
+        if (linkCreated)
+        {
+            await assertion.ThrowAsync<InvalidDataException>();
+        }
+        else
+        {
+            await assertion.ThrowAsync<IOException>();
+        }
 
         File.ReadAllBytes(outside).Should().Equal(sentinel);
         if (!File.Exists(outside)) throw new InvalidOperationException("Synthetic sentinel was removed.");

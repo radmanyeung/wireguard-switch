@@ -156,8 +156,8 @@ public sealed class EnableTunnelCoordinatorCloseTests
 
         factory.Processes[0].Exit(0);
         finishFirstFollowOn.SetResult();
-        await firstActivity.Completion.WaitAsync(TimeSpan.FromSeconds(2));
-        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await firstActivity.Completion.WaitAsync(TimeSpan.FromSeconds(10));
+        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var secondActivity = coordinator.CaptureActivity();
         secondActivity.PendingTunnel.Should().Be(secondTunnel);

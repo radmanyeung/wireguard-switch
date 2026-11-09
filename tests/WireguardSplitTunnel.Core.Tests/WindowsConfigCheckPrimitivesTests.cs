@@ -96,7 +96,7 @@ public sealed class WindowsConfigCheckPrimitivesTests : IDisposable
         if (!TryCreateFileLink(fileLink, targetFile)) return;
 
         Action fileCheck = () => WindowsConfigCheckPrimitives.EnsureNoReparsePoints(fileLink);
-        fileCheck.Should().Throw<IOException>().WithMessage("*reparse point*");
+        fileCheck.Should().Throw<InvalidDataException>().WithMessage("*reparse point*");
 
         var targetDirectory = Directory.CreateDirectory(Path.Combine(root, "target-directory"));
         File.WriteAllText(Path.Combine(targetDirectory.FullName, "probe.conf"), "probe", new UTF8Encoding(false));
@@ -105,7 +105,7 @@ public sealed class WindowsConfigCheckPrimitivesTests : IDisposable
 
         Action directoryCheck = () => WindowsConfigCheckPrimitives.EnsureNoReparsePoints(
             Path.Combine(directoryLink, "probe.conf"));
-        directoryCheck.Should().Throw<IOException>().WithMessage("*reparse point*");
+        directoryCheck.Should().Throw<InvalidDataException>().WithMessage("*reparse point*");
     }
 
     [Fact]

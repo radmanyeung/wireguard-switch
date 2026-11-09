@@ -839,7 +839,7 @@ public sealed class InstallerBootstrapTests : IDisposable
         window.IndexOf("WaitForInstallCommitAsync", StringComparison.Ordinal)
             .Should().BeLessThan(
                 window.IndexOf("AutoRenewDomainRoutesOnStartAsync", StringComparison.Ordinal));
-        window.Should().Contain("if (installCommitted && !isWindowClosing)");
+        window.Should().Contain("if (installCommitted && startupRecoveryCompleted && !isWindowClosing &&");
         install.Should().Contain("installHealthToken");
         install.Should().Contain("InstallCommit");
         install.Should().Contain("$NoPostInstallSelfTest -or");
